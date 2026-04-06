@@ -1,0 +1,47 @@
+name: Deploy Energy Comparator
+
+on:
+  push:
+    branches: ["main"] # Triggered every time you push to the main branch
+  workflow_dispatch:   # Allows you to run the workflow manually
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Inject Secrets into HTML
+        run: |
+          # Replaces the placeholders in your HTML with the actual secrets from GitHub
+          sed -i "s/NREL_API_KEY_PLACEHOLDER/${{ secrets.NREL_API_KEY }}/g" energy_efficiency.html
+          sed -i "s/USER_EMAIL_PLACEHOLDER/${{ secrets.USER_EMAIL }}/g" energy_efficiency.html
+
+      - name: Prepare for Pages
+        # Renaming the file to index.html ensures it loads as your site's home page
+        run: mv energy_efficiency.html index.html
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: '.'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
