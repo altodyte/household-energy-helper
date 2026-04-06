@@ -269,7 +269,7 @@
                 }
                 const lines = csvText.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
                 if (lines.length < 2) {
-                    console.error("CSV has too few lines:", lines);
+                    console.error("CSV has too few lines");
                     return { error: "NREL data format is invalid (too few lines)" };
                 }
                 
@@ -288,7 +288,7 @@
                     if (lines.length > 2 && lines[2].toLowerCase().includes('temperature')) {
                         headerIdx = 2;
                     } else {
-                        console.error("Could not find header row. First few lines:", lines.slice(0, 5));
+                        console.error("Could not find header row in NREL data");
                         return { error: "Could not find Temperature column in NREL data" };
                     }
                 }
@@ -296,7 +296,7 @@
                 const headers = lines[headerIdx].split(',');
                 const tempIdx = headers.findIndex(h => h.trim().toLowerCase() === 'temperature');
                 if (tempIdx === -1) {
-                    console.error("Could not find Temperature column index. Headers:", headers);
+                    console.error("Could not find Temperature column index");
                     return { error: "Temperature column missing from NREL data" };
                 }
 
@@ -540,67 +540,83 @@
                     const { lat, lon } = geoData[0];
                     setLoadProgress(20);
 
-                    // 2. Fetch TMY climate data from NREL NSRDB
-                    setLookupMessage("Generating TMY climate data file (NREL server-side)...");
+                    // 2. Fetch climate data from Open-Meteo Archive (using the last full year: 2025)
+                    setLookupMessage("Fetching 2025 climate data (Open-Meteo)...");
                     
-                    const params = new URLSearchParams({
-                        api_key: 'NREL_API_KEY_PLACEHOLDER',
-                        wkt: `POINT(${lon} ${lat})`,
-                        attributes: 'air_temperature',
-                        names: 'tmy',
-                        interval: '60',
-                        utc: 'false',
-                        full_name: 'User',
-                        email: 'USER_EMAIL_PLACEHOLDER',
-                        affiliation: 'personal',
-                        reason: 'research'
-                    });
+                    const omApiUrl = `https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lon}&start_date=2025-01-01&end_date=2025-12-31&hourly=temperature_2m`;
+                    console.log(`[Weather] Starting fetch for Lat: ${lat}, Lon: ${lon} using Archive API (2025)`);
+                    
+                    let omData = null;
+                    let lastError = null;
+                    const startTime = Date.now();
 
-                    // NREL is picky about spaces being %20, not +
-                    const nrelApiUrl = `https://developer.nrel.gov/api/nsrdb/v2/solar/nsrdb-GOES-tmy-v4-0-0-download.csv?${params.toString().replace(/\+/g, '%20')}`;
-                    
-                    let csvText;
-                    if (useProxy) {
-                        const proxiedUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(nrelApiUrl)}`;
-                        const nrelRes = await fetch(proxiedUrl);
-                        if (!nrelRes.ok) throw new Error(`Proxy request failed with status ${nrelRes.status}`);
-                        const proxyData = await nrelRes.json();
-                        csvText = proxyData.contents;
+                    const tryFetch = async (url, type) => {
+                        console.log(`[Weather] Attempting ${type} fetch: ${url}`);
+                        const res = await fetch(url);
+                        if (!res.ok) throw new Error(`${type} fetch failed: ${res.status} ${res.statusText}`);
+                        const data = await res.json();
+                        console.log(`[Weather] ${type} fetch successful in ${Date.now() - startTime}ms`);
+                        return data;
+                    };
+
+                    try {
+                        // Attempt 1: Direct
+                        omData = await tryFetch(omApiUrl, "Direct");
+                    } catch (e1) {
+                        console.warn("[Weather] Direct fetch failed:", e1.message);
+                        lastError = e1;
                         
-                        // AllOrigins might return an array or a single string
-                        if (Array.isArray(csvText)) csvText = csvText[0];
-                        
-                        // If content-type was octet-stream, AllOrigins returns a data URI
-                        if (csvText && csvText.startsWith('data:')) {
-                            setLookupMessage("Decoding proxy data...");
+                        try {
+                            // Attempt 2: AllOrigins
+                            setLookupMessage("Fetching data (Proxy A)...");
+                            const proxyA = `https://api.allorigins.win/get?url=${encodeURIComponent(omApiUrl)}`;
+                            const resp = await tryFetch(proxyA, "AllOrigins");
+                            omData = JSON.parse(resp.contents);
+                        } catch (e2) {
+                            console.warn("[Weather] AllOrigins failed:", e2.message);
+                            lastError = e2;
+
                             try {
-                                const base64 = csvText.split(',')[1];
-                                csvText = atob(base64);
-                            } catch (e) {
-                                console.error("Base64 decode failed:", e);
+                                // Attempt 3: CorsProxy.io
+                                setLookupMessage("Fetching data (Proxy B)...");
+                                const proxyB = `https://corsproxy.io/?${encodeURIComponent(omApiUrl)}`;
+                                omData = await tryFetch(proxyB, "CorsProxy");
+                            } catch (e3) {
+                                console.error("[Weather] All attempts failed.");
+                                lastError = e3;
                             }
                         }
-                    } else {
-                        const nrelRes = await fetch(nrelApiUrl);
-                        if (!nrelRes.ok) throw new Error(`NREL request failed with status ${nrelRes.status}`);
-                        csvText = await nrelRes.text();
                     }
-
-                    if (!csvText || csvText.includes("Not Found") || csvText.includes("Error")) {
-                        throw new Error("NREL API returned an error or no data");
+                    
+                    if (!omData || !omData.hourly || !omData.hourly.temperature_2m) {
+                        throw new Error(`All weather data sources failed. Last error: ${lastError ? lastError.message : 'Unknown'}`);
                     }
 
                     setLookupMessage("Parsing 8,760 hours of climate data...");
                     setLoadProgress(95);
 
-                    // 3. Parse and bin data
-                    const binnedResult = parseNrelCSV(csvText);
-                    if (binnedResult.error) throw new Error(binnedResult.error);
+                    // 3. Process Open-Meteo JSON into bins
+                    const temperatures = omData.hourly.temperature_2m;
+                    console.log(`[Weather] Received ${temperatures.length} hourly data points.`);
+                    const bins = {};
+                    for (let i = -50; i <= 125; i++) bins[i] = 0;
                     
-                    setFetchedBinData(binnedResult.data);
+                    temperatures.forEach(tempC => {
+                        const tempF = Math.round(tempC * 9/5 + 32);
+                        if (tempF >= -50 && tempF <= 125) {
+                            bins[tempF]++;
+                        }
+                    });
+
+                    const binnedData = [];
+                    for (let i = -20; i <= 75; i++) {
+                        binnedData.push({ temp: i, hours: bins[i] || 0 });
+                    }
+                    
+                    setFetchedBinData(binnedData);
                     
                     // 4. Save to Cache
-                    localStorage.setItem(cacheKey, JSON.stringify(binnedResult.data));
+                    localStorage.setItem(cacheKey, JSON.stringify(binnedData));
                     const count = Object.keys(localStorage).filter(k => k.startsWith('tmy_v4_')).length;
                     setCacheSize(count);
 
@@ -608,7 +624,12 @@
                     setLookupMessage("TMY data loaded and cached successfully.");
                     setCurrentView(2);
                 } catch (err) {
-                    console.error(err);
+                    console.error("[TMY] Final Error Detail:", {
+                        message: err.message,
+                        stack: err.stack,
+                        zip: zipCode,
+                        time: new Date().toISOString()
+                    });
                     setLookupMessage(`Error: ${err.message}. Using fallback model.`);
                     setFetchedBinData(null);
                     setCurrentView(2);
@@ -884,8 +905,7 @@
                             <ul className="space-y-2">
                                 <li className="flex gap-2 items-start"><Icon name="ExternalLink" size={14} className="mt-1 flex-shrink-0 text-blue-500"/><p><strong>ASHRAE Fundamentals:</strong> Basis for Variable Base Degree Day (VBDD) modeling. <a href="https://www.ashrae.org/technical-resources/bookstore/handbook-of-fundamentals" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">Reference</a></p></li>
                                 <li className="flex gap-2 items-start"><Icon name="ExternalLink" size={14} className="mt-1 flex-shrink-0 text-blue-500"/><p><strong>MA Rates:</strong> Eversource Seasonal Delivery Discount (~$0.073/kWh). <a href="https://www.eversource.com/residential/account-billing/manage-bill/about-your-bill/rates-tariffs/electric-delivery-rates" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">Link</a></p></li>
-                                <li className="flex gap-2 items-start"><Icon name="ExternalLink" size={14} className="mt-1 flex-shrink-0 text-blue-500"/><p><strong>Climate Data:</strong> NREL NSRDB Typical Meteorological Year (TMY) v4.0.0. <a href="https://developer.nrel.gov/docs/solar/nsrdb/" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">NSRDB API</a></p></li>
-                                <li className="flex gap-2 items-start"><Icon name="ExternalLink" size={14} className="mt-1 flex-shrink-0 text-blue-500"/><p><strong>National Averages:</strong> U.S. Energy Information Administration (EIA) monthly reporting. <a href="https://www.eia.gov/" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">EIA website</a></p></li>
+                                <li className="flex gap-2 items-start"><Icon name="ExternalLink" size={14} className="mt-1 flex-shrink-0 text-blue-500"/><p><strong>Climate Data:</strong> Open-Meteo ERA5 Archive (Historical 2025). <a href="https://open-meteo.com/en/docs/historical-weather-api" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">Open-Meteo API</a></p></li>                                <li className="flex gap-2 items-start"><Icon name="ExternalLink" size={14} className="mt-1 flex-shrink-0 text-blue-500"/><p><strong>National Averages:</strong> U.S. Energy Information Administration (EIA) monthly reporting. <a href="https://www.eia.gov/" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">EIA website</a></p></li>
                             </ul>
                         </div>
                         <div className="space-y-3">
