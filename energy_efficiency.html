@@ -61,7 +61,7 @@
         const fetchEiaPrices = async (state) => {
             if (!EIA_API_KEY || EIA_API_KEY.includes('PLACEHOLDER')) return null;
             
-            const results = { electricity: null, gas: null, oil: null };
+            const results = { electricity: null, gas: null, oil: null, propane: null };
 
             try {
                 // 1. Electricity Price (cents/kWh -> $/kWh)
@@ -75,7 +75,7 @@
 
                 // 2. Natural Gas Price ($/kcf -> $/therm) - 1 kcf approx 10.37 therms
                 // Note: duoarea is the correct facet name for v2 natural-gas
-                const gasUrl = `https://api.eia.gov/v2/natural-gas/pri/sum/data/?api_key=${EIA_API_KEY}&frequency=monthly&data[0]=value&facets[process][]=VRS&facets[duoarea][]=S${state}&sort[0][column]=period&sort[0][direction]=desc&length=1`;
+                const gasUrl = `https://api.eia.gov/v2/natural-gas/pri/sum/data/?api_key=${EIA_API_KEY}&frequency=monthly&data[0]=value&facets[process][]=PRS&facets[duoarea][]=S${state}&sort[0][column]=period&sort[0][direction]=desc&length=1`;
                 const gasRes = await fetch(gasUrl);
                 if (!gasRes.ok) throw new Error(`EIA Gas failed: ${gasRes.status}`);
                 const gasData = await gasRes.json();
@@ -85,12 +85,21 @@
 
                 // 3. Heating Oil Price ($/gal)
                 // Note: petroleum/pri/wfr is the correct route for weekly heating oil
-                const oilUrl = `https://api.eia.gov/v2/petroleum/pri/wfr/data/?api_key=${EIA_API_KEY}&frequency=weekly&data[0]=value&facets[product][]=EPD2W&facets[process][]=PRP&facets[duoarea][]=S${state}&sort[0][column]=period&sort[0][direction]=desc&length=1`;
+                const oilUrl = `https://api.eia.gov/v2/petroleum/pri/wfr/data/?api_key=${EIA_API_KEY}&frequency=weekly&data[0]=value&facets[product][]=EPD2F&facets[process][]=PRS&facets[duoarea][]=S${state}&sort[0][column]=period&sort[0][direction]=desc&length=1`;
                 const oilRes = await fetch(oilUrl);
                 if (!oilRes.ok) throw new Error(`EIA Oil failed: ${oilRes.status}`);
                 const oilData = await oilRes.json();
                 if (oilData.response.data.length > 0) {
                     results.oil = parseFloat(oilData.response.data[0].value);
+                }
+
+                // 4. Propane Price ($/gal)
+                const propaneUrl = `https://api.eia.gov/v2/petroleum/pri/wfr/data/?api_key=${EIA_API_KEY}&frequency=weekly&data[0]=value&facets[product][]=EPLLPA&facets[process][]=PRS&facets[duoarea][]=S${state}&sort[0][column]=period&sort[0][direction]=desc&length=1`;
+                const proRes = await fetch(propaneUrl);
+                if (!proRes.ok) throw new Error(`EIA Propane failed: ${proRes.status}`);
+                const proData = await proRes.json();
+                if (proData.response.data.length > 0) {
+                    results.propane = parseFloat(proData.response.data[0].value);
                 }
             } catch (err) {
                 // Sanitize error to prevent key exposure in logs
@@ -159,6 +168,7 @@
         const X_MAX = 65;
         const KWH_PER_GALLON_OIL = 40.6; 
         const KWH_PER_THERM_GAS = 29.3;  
+        const KWH_PER_GALLON_PROPANE = 26.8;
 
         const UA_BASE_BY_SIZE = { small: 0.10, medium: 0.15, large: 0.25 };
         const UA_MULTIPLIER_BY_INSULATION = { poor: 1.4, average: 1.0, excellent: 0.7 };
@@ -216,6 +226,7 @@
         const COMBINED_SYSTEM_OPTIONS = [
             { value: 'gas', label: 'Natural Gas Furnace/Boiler' },
             { value: 'oil', label: 'Heating Oil Furnace/Boiler' },
+            { value: 'propane', label: 'Propane Furnace/Boiler' },
             { value: 'electric', label: 'Electric Resistance/Baseboard' },
             { value: 'hp-high', label: 'Heat Pump (High Efficiency)' },
             { value: 'hp-medium', label: 'Heat Pump (Medium Efficiency)' },
@@ -297,19 +308,19 @@
 
             const [internalGains, setInternalGains] = useState(600); 
             const [efficiency, setEfficiency] = useState(85);
-            const [elecPrice, setElecPrice] = useState(0.16); 
+            const [elecPrice, setElecPrice] = useState(0.16);
             const [applyHpDiscount, setApplyHpDiscount] = useState(false);
             const [hpDiscount, setHpDiscount] = useState(0.073);
             const [oilPrice, setOilPrice] = useState(3.80);
-            const [gasPrice, setGasPrice] = useState(1.40); 
-            const [outTemp, setOutTemp] = useState(30);
-            const [cacheSize, setCacheSize] = useState(0);
+            const [gasPrice, setGasPrice] = useState(1.40);
+            const [propanePrice, setPropanePrice] = useState(3.50);
+            const [outTemp, setOutTemp] = useState(30);            const [cacheSize, setCacheSize] = useState(0);
             
             const svgRef = useRef(null);
             const [isDragging, setIsDragging] = useState(false);
 
-            const isFossilFuel = primaryHeating === 'gas' || primaryHeating === 'oil';
-            const isFossilFuel_Inner = primaryHeating === 'gas' || primaryHeating === 'oil';
+            const isFossilFuel = primaryHeating === 'gas' || primaryHeating === 'oil' || primaryHeating === 'propane';
+            const isFossilFuel_Inner = primaryHeating === 'gas' || primaryHeating === 'oil' || primaryHeating === 'propane';
 
             // --- Effects ---
             useEffect(() => {
@@ -404,6 +415,7 @@
             
             const oilCostAtEfficiency = useCallback((eff) => oilPrice / (KWH_PER_GALLON_OIL * (eff / 100)), [oilPrice]);
             const gasCostAtEfficiency = useCallback((eff) => gasPrice / (KWH_PER_THERM_GAS * (eff / 100)), [gasPrice]);
+            const propaneCostAtEfficiency = useCallback((eff) => propanePrice / (KWH_PER_GALLON_PROPANE * (eff / 100)), [propanePrice]);
 
             const getLoadAtTemp = useCallback((t, ua, setpoint) => {
                 const gainsKw = internalGains / 1000;
@@ -433,7 +445,7 @@
             }, [activeZipCode, balancePoint, fetchedBinData]);
 
             const annualCosts = useMemo(() => {
-                let hpTotal = 0, oilTotal = 0, gasTotal = 0, electricTotal = 0;
+                let hpTotal = 0, oilTotal = 0, gasTotal = 0, propaneTotal = 0, electricTotal = 0;
                 binData.forEach(d => {
                     if (d.hours <= 0) return;
                     const load = getLoadAtTemp(d.temp, currentUA, heatingSetpoint);
@@ -441,13 +453,14 @@
                     hpTotal += kwh * (effectiveElecPrice / getCOP(d.temp, activeCurve));
                     oilTotal += kwh * oilCostAtEfficiency(efficiency);
                     gasTotal += kwh * gasCostAtEfficiency(efficiency);
+                    propaneTotal += kwh * propaneCostAtEfficiency(efficiency);
                     electricTotal += kwh * effectiveElecPrice;
                 });
-                return { hp: hpTotal, oil: oilTotal, gas: gasTotal, electric: electricTotal };
-            }, [binData, getLoadAtTemp, currentUA, heatingSetpoint, effectiveElecPrice, efficiency, activeCurve, oilCostAtEfficiency, gasCostAtEfficiency]);
+                return { hp: hpTotal, oil: oilTotal, gas: gasTotal, propane: propaneTotal, electric: electricTotal };
+            }, [binData, getLoadAtTemp, currentUA, heatingSetpoint, effectiveElecPrice, efficiency, activeCurve, oilCostAtEfficiency, gasCostAtEfficiency, propaneCostAtEfficiency]);
 
             const upgradedAnnualCosts = useMemo(() => {
-                let hpTotal = 0, oilTotal = 0, gasTotal = 0, electricTotal = 0;
+                let hpTotal = 0, oilTotal = 0, gasTotal = 0, propaneTotal = 0, electricTotal = 0;
                 const baselineForUpgrades = changeSetpoint ? upgradedSetpoint : heatingSetpoint;
                 const setpointEffective = useSmartThermostat ? baselineForUpgrades - (2 * awayHours / 24) : baselineForUpgrades;
                 const effEffective = furnaceTuneUp ? upgradedEfficiency : efficiency;
@@ -461,12 +474,13 @@
                     hpTotal += kwh * (effectiveElecPrice / getCOP(d.temp, curveUpgrade));
                     oilTotal += kwh * oilCostAtEfficiency(effEffective);
                     gasTotal += kwh * gasCostAtEfficiency(effEffective);
+                    propaneTotal += kwh * propaneCostAtEfficiency(effEffective);
                     electricTotal += kwh * effectiveElecPrice;
                 });
-                return { hp: hpTotal, oil: oilTotal, gas: gasTotal, electric: electricTotal };
-            }, [binData, getLoadAtTemp, upgradedUA, heatingSetpoint, changeSetpoint, upgradedSetpoint, awayHours, useSmartThermostat, furnaceTuneUp, upgradedEfficiency, efficiency, addHP, upgradeHpProfileId, hpProfileId, effectiveElecPrice, oilCostAtEfficiency, gasCostAtEfficiency]);
+                return { hp: hpTotal, oil: oilTotal, gas: gasTotal, propane: propaneTotal, electric: electricTotal };
+            }, [binData, getLoadAtTemp, upgradedUA, heatingSetpoint, changeSetpoint, upgradedSetpoint, awayHours, useSmartThermostat, furnaceTuneUp, upgradedEfficiency, efficiency, addHP, upgradeHpProfileId, hpProfileId, effectiveElecPrice, oilCostAtEfficiency, gasCostAtEfficiency, propaneCostAtEfficiency]);
 
-            const maxAnnualCost = Math.max(annualCosts.hp, annualCosts.oil, annualCosts.gas, annualCosts.electric);
+            const maxAnnualCost = Math.max(annualCosts.hp, annualCosts.oil, annualCosts.gas, annualCosts.propane, annualCosts.electric);
 
             const costBars = useMemo(() => {
                 const hpModelName = COP_PROFILES[hpProfileId].name;
@@ -474,6 +488,7 @@
                     { id: 'hp', label: `Heat Pump (${hpModelName})`, cost: annualCosts.hp, iconName: 'Zap', colorClass: 'bg-blue-500' },
                     { id: 'oil', label: 'Heating Oil', cost: annualCosts.oil, iconName: 'Droplet', colorClass: 'bg-slate-500' },
                     { id: 'gas', label: 'Natural Gas', cost: annualCosts.gas, iconName: 'Flame', colorClass: 'bg-red-500' },
+                    { id: 'propane', label: 'Propane', cost: annualCosts.propane, iconName: 'Flame', colorClass: 'bg-orange-500' },
                     { id: 'electric', label: 'Electric Resistance', cost: annualCosts.electric, iconName: 'Zap', colorClass: 'bg-purple-500' }
                 ];
                 return bars.sort((a, b) => a.cost - b.cost);
@@ -486,6 +501,7 @@
                     hp: { id: 'hp', label: `Heat Pump (${modelName})`, cost: upgradedAnnualCosts.hp, iconName: 'Zap', colorClass: 'bg-blue-500' },
                     oil: { id: 'oil', label: 'Heating Oil', cost: upgradedAnnualCosts.oil, iconName: 'Droplet', colorClass: 'bg-slate-500' },
                     gas: { id: 'gas', label: 'Natural Gas', cost: upgradedAnnualCosts.gas, iconName: 'Flame', colorClass: 'bg-red-500' },
+                    propane: { id: 'propane', label: 'Propane', cost: upgradedAnnualCosts.propane, iconName: 'Flame', colorClass: 'bg-orange-500' },
                     electric: { id: 'electric', label: 'Electric Resistance', cost: upgradedAnnualCosts.electric, iconName: 'Zap', colorClass: 'bg-purple-500' }
                 };
                 return bars[systemId];
@@ -542,6 +558,17 @@
                 if (firstHPCheaper <= -20) return "< -20";
                 return firstHPCheaper;
             }, [effectiveElecPrice, efficiency, activeCurve, oilCostAtEfficiency, heatingSetpoint]);
+
+            const hpVsPropaneBalance = useMemo(() => {
+                const temps = [];
+                for (let t = -20; t <= 75; t++) temps.push(t);
+
+                const firstHPCheaper = temps.find(t => (effectiveElecPrice / getCOP(t, activeCurve)) <= propaneCostAtEfficiency(efficiency));
+                if (firstHPCheaper === undefined) return `> ${heatingSetpoint}`;
+                if (firstHPCheaper <= -20) return "< -20";
+                return firstHPCheaper;
+            }, [effectiveElecPrice, efficiency, activeCurve, propaneCostAtEfficiency, heatingSetpoint]);
+
             const hpCheaperPercentage = useMemo(() => {
                 let totalHeatingHours = 0;
                 let hpCheaperHours = 0;
@@ -551,13 +578,14 @@
                         const hpCost = effectiveElecPrice / getCOP(d.temp, activeCurve);
                         const oilCost = oilCostAtEfficiency(efficiency);
                         const gasCost = gasCostAtEfficiency(efficiency);
-                        if (hpCost < oilCost && hpCost < gasCost) {
+                        const propaneCost = propaneCostAtEfficiency(efficiency);
+                        if (hpCost < oilCost && hpCost < gasCost && hpCost < propaneCost) {
                             hpCheaperHours += d.hours;
                         }
                     }
                 });
                 return totalHeatingHours > 0 ? Math.round((hpCheaperHours / totalHeatingHours) * 100) : 0;
-            }, [binData, activeCurve, effectiveElecPrice, efficiency, oilCostAtEfficiency, gasCostAtEfficiency]);
+            }, [binData, activeCurve, effectiveElecPrice, efficiency, oilCostAtEfficiency, gasCostAtEfficiency, propaneCostAtEfficiency]);
 
             // --- Handlers ---
             const clearCache = () => {
@@ -575,13 +603,13 @@
                     const prefix = zipCode.substring(0, 2);
                     // 1. Initial Regional Defaults
                     if (state === 'MA' || prefix === '01' || prefix === '02') {
-                        setElecPrice(0.33); setOilPrice(4.10); setGasPrice(1.80);
+                        setElecPrice(0.33); setOilPrice(4.10); setGasPrice(1.80); setPropanePrice(3.50);
                         setApplyHpDiscount(true); setHpDiscount(0.073);
                     } else if (['NH', 'ME', 'VT', 'CT', 'RI'].includes(state)) {
-                        setElecPrice(0.28); setOilPrice(4.00); setGasPrice(1.70);
+                        setElecPrice(0.28); setOilPrice(4.00); setGasPrice(1.70); setPropanePrice(3.40);
                         setApplyHpDiscount(false);
                     } else {
-                        setElecPrice(0.16); setOilPrice(3.80); setGasPrice(1.40);
+                        setElecPrice(0.16); setOilPrice(3.80); setGasPrice(1.40); setPropanePrice(3.20);
                         setApplyHpDiscount(false);
                     }
 
@@ -590,6 +618,7 @@
                         if (prices.electricity) setElecPrice(Number(prices.electricity.toFixed(3)));
                         if (prices.gas) setGasPrice(Number(prices.gas.toFixed(2)));
                         if (prices.oil) setOilPrice(Number(prices.oil.toFixed(2)));
+                        if (prices.propane) setPropanePrice(Number(prices.propane.toFixed(2)));
                     }
                     setPriceSource(source);
                 };
@@ -752,7 +781,7 @@
             // --- Sub-Renders ---
             const renderLineGraph = () => {
                 const innerWidth = GRAPH_WIDTH - GRAPH_PADDING.left - GRAPH_PADDING.right, innerHeight = GRAPH_HEIGHT - GRAPH_PADDING.top - GRAPH_PADDING.bottom;
-                const yMax = Math.max(effectiveElecPrice / activeCurve[0].cop, oilCostAtEfficiency(efficiency), gasCostAtEfficiency(efficiency)) * 1.1;
+                const yMax = Math.max(effectiveElecPrice / activeCurve[0].cop, oilCostAtEfficiency(efficiency), gasCostAtEfficiency(efficiency), propaneCostAtEfficiency(efficiency)) * 1.1;
                 const mapX = (t) => GRAPH_PADDING.left + ((t - X_MIN) / (X_MAX - X_MIN)) * innerWidth;
                 const mapY = (c) => GRAPH_PADDING.top + innerHeight - (c / yMax) * innerHeight;
                 const createPath = (key) => graphData_Across.map((d, i) => (i === 0 ? 'M' : 'L') + ` ${mapX(d.temp)} ${mapY(d[key])}`).join(' ');
@@ -767,7 +796,7 @@
                         <g className="cursor-ew-resize" onPointerDown={(e) => { e.target.setPointerCapture(e.pointerId); setIsDragging(true); handleDrag(e.clientX); }}>
                             <line x1={mapX(outTemp)} y1={GRAPH_PADDING.top} x2={mapX(outTemp)} y2={GRAPH_PADDING.top+innerHeight} className="stroke-transparent stroke-[24px]"/><line x1={mapX(outTemp)} y1={GRAPH_PADDING.top} x2={mapX(outTemp)} y2={GRAPH_PADDING.top+innerHeight} className={`stroke-2 ${isDragging ? 'stroke-blue-500' : 'stroke-slate-400 dark:stroke-slate-500'}`} strokeDasharray="6 6"/><rect x={mapX(outTemp)-6} y={GRAPH_PADDING.top+innerHeight/2-12} width={12} height={24} rx={4} className={`${isDragging ? 'fill-blue-500' : 'fill-slate-400'}`}/><text x={mapX(outTemp)} y={GRAPH_PADDING.top-5} textAnchor="middle" className="font-bold fill-slate-600 dark:fill-slate-300 select-none">{outTemp}°F</text>
                         </g>
-                        <path d={createPath('gas')} fill="none" className="stroke-red-500" strokeWidth="3" strokeLinejoin="round"/><path d={createPath('oil')} fill="none" className="stroke-slate-500" strokeWidth="3" strokeLinejoin="round"/><path d={createPath('hp')} fill="none" className="stroke-blue-500" strokeWidth="4" strokeLinejoin="round"/>
+                        <path d={createPath('gas')} fill="none" className="stroke-red-500" strokeWidth="3" strokeLinejoin="round"/><path d={createPath('oil')} fill="none" className="stroke-slate-500" strokeWidth="3" strokeLinejoin="round"/><path d={createPath('propane')} fill="none" className="stroke-orange-500" strokeWidth="3" strokeLinejoin="round"/><path d={createPath('hp')} fill="none" className="stroke-blue-500" strokeWidth="4" strokeLinejoin="round"/>
                     </svg>
                 );
             };
@@ -811,6 +840,13 @@
                             <g>
                                 <line x1={mapX(hpVsOilBalance)} y1={padding.top} x2={mapX(hpVsOilBalance)} y2={padding.top+innerHeight} className="stroke-slate-500 stroke-2 opacity-50" strokeDasharray="4 4"/>
                                 <text x={mapX(hpVsOilBalance)} y={46} textAnchor="middle" className="fill-slate-600 dark:fill-slate-400 font-bold text-[10px]">Oil cheaper &lt; {hpVsOilBalance}°F</text>
+                            </g>
+                        )}
+
+                        {typeof hpVsPropaneBalance === 'number' && hpVsPropaneBalance > -20 && (
+                            <g>
+                                <line x1={mapX(hpVsPropaneBalance)} y1={padding.top} x2={mapX(hpVsPropaneBalance)} y2={padding.top+innerHeight} className="stroke-orange-500 stroke-2 opacity-50" strokeDasharray="4 4"/>
+                                <text x={mapX(hpVsPropaneBalance)} y={58} textAnchor="middle" className="fill-orange-600 dark:fill-orange-400 font-bold text-[10px]">Propane cheaper &lt; {hpVsPropaneBalance}°F</text>
                             </g>
                         )}
                     </svg>
@@ -999,8 +1035,7 @@
                         <div className="space-y-3">
                             <h3 className="font-bold text-slate-800 dark:text-slate-200 uppercase text-xs tracking-widest font-sans">Physics & Equipment</h3>
                             <ul className="space-y-2 list-disc pl-4">
-                                <li><strong>Conversions:</strong> Standard physics conversions (40.6 kWh/gal for Oil, 29.3 kWh/therm for Gas).</li>
-                                <li><strong>Load Profile:</strong> Dynamic $UA$ (heat loss coefficient) adjusted for surface-area-to-volume ratio ($1/L$) based on house size.</li>
+                                <li><strong>Conversions:</strong> Standard physics conversions (40.6 kWh/gal for Oil, 29.3 kWh/therm for Gas, 26.8 kWh/gal for Propane).</li>                                <li><strong>Load Profile:</strong> Dynamic $UA$ (heat loss coefficient) adjusted for surface-area-to-volume ratio ($1/L$) based on house size.</li>
                                 <li><strong>Internal Gains:</strong> Default internal heat generation (e.g. 600W avg) creates the Balance Point.</li>
                                 <li><strong>Equipment:</strong> COP performance curves derived from the <a href="https://neep.org/heating-electrification/ccashp-specification-product-list" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">NEEP Product List</a> and <a href="https://docs.nrel.gov/docs/fy23osti/85081.pdf" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">NREL physical extrapolation</a>.</li>
                                 <li><strong>Upgrades:</strong> Manual maintenance recovery modeled at a 105% efficiency gain over the degraded baseline.</li>
@@ -1160,14 +1195,14 @@
                                 </div>
 
                                 <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border dark:border-slate-700 flex flex-col gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500 delay-150">
-                                    <h2 className="text-xl font-bold dark:text-white px-4 pt-4">Cost to deliver heat across temperatures</h2>
+                                    <h2 className="text-xl font-bold dark:text-white px-4 pt-4">Cost to deliver heat across outdoor temperatures</h2>
                                     <div className="w-full h-80 pt-4">{renderLineGraph()}</div>
                                     <div className="flex gap-4 text-xs font-bold dark:text-slate-400 justify-center pb-2">
                                         <span className="flex items-center gap-1.5"><div className="w-3 h-1 bg-blue-500 rounded-full"></div> Heat Pump</span>
                                         <span className="flex items-center gap-1.5"><div className="w-3 h-1 bg-slate-500 rounded-full"></div> Oil</span>
                                         <span className="flex items-center gap-1.5"><div className="w-3 h-1 bg-red-500 rounded-full"></div> Gas</span>
-                                    </div>
-                                    <div className="border-t border-slate-100 dark:border-slate-700 pt-4 flex flex-col sm:flex-row gap-6 text-sm px-4">
+                                        <span className="flex items-center gap-1.5"><div className="w-3 h-1 bg-orange-500 rounded-full"></div> Propane</span>
+                                    </div>                                    <div className="border-t border-slate-100 dark:border-slate-700 pt-4 flex flex-col sm:flex-row gap-6 text-sm px-4">
                                         <div className="flex-1 flex flex-col items-center sm:items-start gap-1 text-slate-600 dark:text-slate-300">
                                             <span className="bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 px-3 py-1 rounded-full font-bold whitespace-nowrap">Gas Balance: {hpVsGasBalance}°F</span>
                                             <p className="text-xs mt-1 text-center sm:text-left">Below this temp, Natural Gas becomes cheaper.</p>
@@ -1176,11 +1211,16 @@
                                             <span className="bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 px-3 py-1 rounded-full font-bold whitespace-nowrap">Oil Balance: {hpVsOilBalance}°F</span>
                                             <p className="text-xs mt-1 text-center sm:text-left">Below this temp, Heating Oil becomes cheaper.</p>
                                         </div>
+                                        <div className="flex-1 flex flex-col items-center sm:items-start gap-1 text-slate-600 dark:text-slate-300">
+                                            <span className="bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400 px-3 py-1 rounded-full font-bold whitespace-nowrap">Propane Balance: {hpVsPropaneBalance}°F</span>
+                                            <p className="text-xs mt-1 text-center sm:text-left">Below this temp, Propane becomes cheaper.</p>
+                                        </div>
                                     </div>
-                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 px-4 pt-4">
+                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 px-4 pt-4">
                                         <ResultCard title="Heat Pump" cost={effectiveElecPrice / currentCOP} iconName="Zap" color="border-l-blue-500" subtitle={`COP: ${currentCOP.toFixed(2)}`} extraInfo={`Rate: $${effectiveElecPrice.toFixed(3)}/kWh`} />
                                         <ResultCard title="Heating Oil" cost={oilCostAtEfficiency(efficiency)} iconName="Droplet" color="border-l-slate-500" />
                                         <ResultCard title="Natural Gas" cost={gasCostAtEfficiency(efficiency)} iconName="Flame" color="border-l-red-500" />
+                                        <ResultCard title="Propane" cost={propaneCostAtEfficiency(efficiency)} iconName="Flame" color="border-l-orange-500" />
                                     </div>
                                     <div className="bg-slate-50 dark:bg-slate-900/30 p-5 mx-4 rounded-xl border dark:border-slate-700 mb-4">
                                         <h3 className="text-sm font-bold mb-4 dark:text-white flex items-center gap-2"><Icon name="Settings" size={16}/> Energy Rates & Efficiency in { activeZipCode || 'your area'}</h3>
@@ -1196,6 +1236,7 @@
                                                 <SliderControl iconName="Settings" label="Furnace Efficiency" value={efficiency} min={60} max={100} step={1} unit="%" onChange={setEfficiency} colorClass="text-slate-500" />
                                                 <SliderControl iconName="Droplet" label="Heating Oil Price" value={oilPrice} min={1.50} max={6.00} step={0.05} unit="$/gal" onChange={setOilPrice} colorClass="text-slate-500" />
                                                 <SliderControl iconName="Flame" label="Natural Gas Price" value={gasPrice} min={0.50} max={4.00} step={0.05} unit="$/therm" onChange={setGasPrice} colorClass="text-red-500" />
+                                                <SliderControl iconName="Flame" label="Propane Price" value={propanePrice} min={1.00} max={6.00} step={0.05} unit="$/gal" onChange={setPropanePrice} colorClass="text-orange-500" />
                                             </div>
                                         </div>
                                     </div>
