@@ -648,7 +648,7 @@
                             const stateCode = ZIP_TO_STATE[prefix];
                             applyRates(stateCode, eiaPrices, source);
 
-                            setLookupMessage("Loaded from local cache.");
+                            setLookupMessage("Loaded data for " + $zipCode + " from local cache.");
                             setCurrentView(2);
                             return;
                         } catch (e) {
@@ -1100,14 +1100,12 @@
                                                 <input type="text" value={zipCode} onChange={e => setZipCode(e.target.value)} disabled={isLoadingData} placeholder="e.g. 02138" className="w-full md:max-w-xs px-3 py-2 border rounded-lg bg-white dark:bg-slate-900 dark:text-white dark:border-slate-700 focus:ring-2 focus:ring-blue-500 outline-none disabled:opacity-50"/>
                                                 <button 
                                                     onClick={(e) => handleZipLookup(e, true, false)} 
-                                                    disabled={isLoadingData || zipCode.length < 5} 
+                                                    disabled={isLoadingData || zipCode.length < 5 || (activeZipCode === zipCode.trim())} 
                                                     className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition-colors whitespace-nowrap font-bold flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
                                                 >
                                                     {isLoadingData ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Icon name="TrendingUp" size={18} />}
-                                                    {activeZipCode ? "Update Data" : "Load data"}
-                                                </button>
-
-                                                {activeZipCode && !isLoadingData && (
+                                                    Load data
+                                                </button>                                                {activeZipCode && activeZipCode === zipCode.trim() && !isLoadingData && (
                                                     <button 
                                                         onClick={(e) => handleZipLookup(e, true, true)} 
                                                         className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors group" 
@@ -1118,8 +1116,7 @@
                                                             <span className="text-xs font-bold uppercase tracking-wider">Re-fetch</span>
                                                         </div>
                                                     </button>
-                                                )}
-                                            </div>
+                                                )}                                            </div>
                                                 {/* Data Status Indicators */}
                                                 {activeZipCode && (
                                                     <div className="flex flex-wrap gap-2 mt-2">
