@@ -1050,18 +1050,28 @@
                                         <div className="flex flex-col gap-2">
                                             <div className="flex flex-wrap gap-2">
                                                 <input type="text" value={zipCode} onChange={e => setZipCode(e.target.value)} disabled={isLoadingData} placeholder="e.g. 02138" className="w-full md:max-w-xs px-3 py-2 border rounded-lg bg-white dark:bg-slate-900 dark:text-white dark:border-slate-700 focus:ring-2 focus:ring-blue-500 outline-none disabled:opacity-50"/>
-                                                <button onClick={(e) => handleZipLookup(e, true, false)} disabled={isLoadingData || !zipCode} className="bg-slate-800 dark:bg-slate-700 text-white px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors whitespace-nowrap font-medium flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
-                                                    {isLoadingData ? <span className="animate-spin">⌛</span> : null}
-                                                    {isLoadingData ? "Load data" : "Load data"}
+                                                <button 
+                                                    onClick={(e) => handleZipLookup(e, true, false)} 
+                                                    disabled={isLoadingData || zipCode.length < 5} 
+                                                    className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition-colors whitespace-nowrap font-bold flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                                                >
+                                                    {isLoadingData ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Icon name="TrendingUp" size={18} />}
+                                                    {activeZipCode ? "Update Data" : "Load data"}
                                                 </button>
-                                                <button onClick={(e) => handleZipLookup(e, true, true)} disabled={isLoadingData || !zipCode} className="bg-slate-200 dark:bg-slate-600 text-slate-700 dark:text-slate-200 px-4 py-2 rounded-lg hover:bg-slate-300 dark:hover:bg-slate-500 transition-colors whitespace-nowrap font-medium flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed" title="Re-fetch and update cache">
-                                                    Override Cache
-                                                </button>
-                                                <button onClick={(e) => handleZipLookup(e, false, true)} disabled={isLoadingData || !zipCode} className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors whitespace-nowrap font-medium flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed" title="Use this if you have enabled CORS in about:config or an extension">
-                                                    Direct Fetch
-                                                </button>
-                                                </div>
 
+                                                {activeZipCode && !isLoadingData && (
+                                                    <button 
+                                                        onClick={(e) => handleZipLookup(e, true, true)} 
+                                                        className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors group" 
+                                                        title="Force fresh data fetch"
+                                                    >
+                                                        <div className="flex items-center gap-1.5 px-1">
+                                                            <Icon name="Settings" size={16} className="group-hover:rotate-180 transition-transform duration-500" />
+                                                            <span className="text-xs font-bold uppercase tracking-wider">Re-fetch</span>
+                                                        </div>
+                                                    </button>
+                                                )}
+                                            </div>
                                                 {/* Data Status Indicators */}
                                                 {activeZipCode && (
                                                     <div className="flex flex-wrap gap-2 mt-2">
