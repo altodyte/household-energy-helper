@@ -43,6 +43,63 @@
     <script type="text/babel">
         const { useState, useMemo, useRef, useCallback, useEffect } = React;
 
+        const EIA_API_KEY = 'EIA_API_KEY_PLACEHOLDER';
+
+        const ZIP_TO_STATE = {
+            '01': 'MA', '02': 'MA', '03': 'NH', '04': 'ME', '05': 'VT', '06': 'CT', '07': 'NJ', '08': 'NJ',
+            '10': 'NY', '11': 'NY', '12': 'NY', '13': 'NY', '14': 'NY', '15': 'PA', '16': 'PA', '17': 'PA', '18': 'PA', '19': 'PA',
+            '20': 'DC', '21': 'MD', '22': 'VA', '23': 'VA', '24': 'VA', '25': 'WV', '26': 'WV', '27': 'NC', '28': 'NC', '29': 'SC',
+            '30': 'GA', '31': 'GA', '32': 'FL', '33': 'FL', '34': 'FL', '35': 'AL', '36': 'AL', '37': 'MS', '38': 'MS', '39': 'TN',
+            '40': 'KY', '41': 'KY', '42': 'KY', '43': 'OH', '44': 'OH', '45': 'OH', '46': 'IN', '47': 'IN', '48': 'MI', '49': 'MI',
+            '50': 'IA', '51': 'IA', '52': 'IA', '53': 'WI', '54': 'WI', '55': 'MN', '56': 'MN', '57': 'SD', '58': 'ND', '59': 'MT',
+            '60': 'IL', '61': 'IL', '62': 'IL', '63': 'MO', '64': 'MO', '65': 'MO', '66': 'KS', '67': 'KS', '68': 'NE', '69': 'NE',
+            '70': 'LA', '71': 'LA', '72': 'LA', '73': 'OK', '74': 'OK', '75': 'TX', '76': 'TX', '77': 'TX', '78': 'TX', '79': 'TX',
+            '80': 'CO', '81': 'CO', '82': 'WY', '83': 'ID', '84': 'UT', '85': 'AZ', '86': 'AZ', '87': 'NM', '88': 'NV', '89': 'NV',
+            '90': 'CA', '91': 'CA', '92': 'CA', '93': 'CA', '94': 'CA', '95': 'CA', '96': 'OR', '97': 'OR', '98': 'WA', '99': 'WA'
+        };
+
+        const fetchEiaPrices = async (state) => {
+            if (!EIA_API_KEY || EIA_API_KEY.includes('PLACEHOLDER')) return null;
+            
+            const results = { electricity: null, gas: null, oil: null };
+
+            try {
+                // 1. Electricity Price (cents/kWh -> $/kWh)
+                const elecUrl = `https://api.eia.gov/v2/electricity/retail-sales/data/?api_key=${EIA_API_KEY}&frequency=monthly&data[0]=price&facets[sectorid][]=RES&facets[stateid][]=${state}&sort[0][column]=period&sort[0][direction]=desc&length=1`;
+                const elecRes = await fetch(elecUrl);
+                if (!elecRes.ok) throw new Error(`EIA Elec failed: ${elecRes.status}`);
+                const elecData = await elecRes.json();
+                if (elecData.response.data.length > 0) {
+                    results.electricity = parseFloat(elecData.response.data[0].price) / 100;
+                }
+
+                // 2. Natural Gas Price ($/kcf -> $/therm) - 1 kcf approx 10.37 therms
+                // Note: duoarea is the correct facet name for v2 natural-gas
+                const gasUrl = `https://api.eia.gov/v2/natural-gas/pri/sum/data/?api_key=${EIA_API_KEY}&frequency=monthly&data[0]=value&facets[process][]=VRS&facets[duoarea][]=S${state}&sort[0][column]=period&sort[0][direction]=desc&length=1`;
+                const gasRes = await fetch(gasUrl);
+                if (!gasRes.ok) throw new Error(`EIA Gas failed: ${gasRes.status}`);
+                const gasData = await gasRes.json();
+                if (gasData.response.data.length > 0) {
+                    results.gas = parseFloat(gasData.response.data[0].value) / 10.37;
+                }
+
+                // 3. Heating Oil Price ($/gal)
+                // Note: petroleum/pri/wfr is the correct route for weekly heating oil
+                const oilUrl = `https://api.eia.gov/v2/petroleum/pri/wfr/data/?api_key=${EIA_API_KEY}&frequency=weekly&data[0]=value&facets[product][]=EPD2W&facets[process][]=PRP&facets[duoarea][]=S${state}&sort[0][column]=period&sort[0][direction]=desc&length=1`;
+                const oilRes = await fetch(oilUrl);
+                if (!oilRes.ok) throw new Error(`EIA Oil failed: ${oilRes.status}`);
+                const oilData = await oilRes.json();
+                if (oilData.response.data.length > 0) {
+                    results.oil = parseFloat(oilData.response.data[0].value);
+                }
+            } catch (err) {
+                // Sanitize error to prevent key exposure in logs
+                const msg = err.message ? err.message.replace(/api_key=[^&]*/g, 'api_key=REDACTED') : "EIA Fetch Error";
+                console.error("EIA Price Fetch Error:", msg);
+            }
+            return results;
+        };
+
         const Icon = ({ name, size = 20, className = "" }) => {
             const icons = {
                 Settings: (
@@ -219,6 +276,7 @@
             const [isLoadingData, setIsLoadingData] = useState(false);
             const [loadProgress, setLoadProgress] = useState(0);
             const [fetchedBinData, setFetchedBinData] = useState(null);
+            const [priceSource, setPriceSource] = useState('regional'); // 'regional' or 'eia'
             const [homeSize, setHomeSize] = useState('medium');
             const [homeInsulation, setHomeInsulation] = useState('average');
             const [primaryHeating, setPrimaryHeating] = useState('gas');
@@ -495,22 +553,49 @@
             const handleZipLookup = async (e, useProxy = true, forceRefresh = false) => {
                 if (!zipCode) return;
 
+                const applyRates = (state, prices = null, source = 'regional') => {
+                    const prefix = zipCode.substring(0, 2);
+                    // 1. Initial Regional Defaults
+                    if (state === 'MA' || prefix === '01' || prefix === '02') {
+                        setElecPrice(0.33); setOilPrice(4.10); setGasPrice(1.80);
+                        setApplyHpDiscount(true); setHpDiscount(0.073);
+                    } else if (['NH', 'ME', 'VT', 'CT', 'RI'].includes(state)) {
+                        setElecPrice(0.28); setOilPrice(4.00); setGasPrice(1.70);
+                        setApplyHpDiscount(false);
+                    } else {
+                        setElecPrice(0.16); setOilPrice(3.80); setGasPrice(1.40);
+                        setApplyHpDiscount(false);
+                    }
+
+                    // 2. Override with specific prices if provided
+                    if (prices) {
+                        if (prices.electricity) setElecPrice(Number(prices.electricity.toFixed(3)));
+                        if (prices.gas) setGasPrice(Number(prices.gas.toFixed(2)));
+                        if (prices.oil) setOilPrice(Number(prices.oil.toFixed(2)));
+                    }
+                    setPriceSource(source);
+                };
+
                 // 0. Check Cache
                 const cacheKey = `tmy_v4_${zipCode}`;
                 if (!forceRefresh) {
                     const cached = localStorage.getItem(cacheKey);
                     if (cached) {
                         try {
-                            const binned = JSON.parse(cached);
+                            const parsed = JSON.parse(cached);
+                            // Handle both old (array) and new (object) cache formats
+                            const binned = Array.isArray(parsed) ? parsed : parsed.binnedData;
+                            const eiaPrices = parsed.eiaPrices || null;
+                            const source = parsed.priceSource || 'regional';
+                            
                             setFetchedBinData(binned);
                             setActiveZipCode(zipCode);
-                            setLookupMessage("Loaded from local cache.");
                             
-                            // Apply regional rates
-                            if (zipCode.startsWith('01') || zipCode.startsWith('02')) {
-                                setElecPrice(0.28); setOilPrice(4.10); setGasPrice(1.80);
-                                setApplyHpDiscount(true); setHpDiscount(0.073);
-                            }
+                            const prefix = zipCode.substring(0, 2);
+                            const stateCode = ZIP_TO_STATE[prefix];
+                            applyRates(stateCode, eiaPrices, source);
+
+                            setLookupMessage("Loaded from local cache.");
                             setCurrentView(2);
                             return;
                         } catch (e) {
@@ -533,7 +618,7 @@
                 }, 400);
 
                 try {
-                    // 1. Geolocate ZIP to Lat/Lon using Nominatim
+                    // 1. Geolocate ZIP to Lat/Lon
                     const geoRes = await fetch(`https://nominatim.openstreetmap.org/search?postalcode=${zipCode}&country=US&format=json`, {
                         headers: { 'Accept': 'application/json' }
                     });
@@ -542,96 +627,79 @@
                     const { lat, lon } = geoData[0];
                     setLoadProgress(20);
 
-                    // 2. Fetch climate data from Open-Meteo Archive (using the last full year: 2025)
-                    setLookupMessage("Fetching 2025 climate data (Open-Meteo)...");
-                    
+                    // 2. Fetch climate data
+                    setLookupMessage("Fetching 2025 climate data...");
                     const omApiUrl = `https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lon}&start_date=2025-01-01&end_date=2025-12-31&hourly=temperature_2m`;
-                    console.log(`[Weather] Starting fetch for Lat: ${lat}, Lon: ${lon} using Archive API (2025)`);
                     
                     let omData = null;
-                    let lastError = null;
                     const startTime = Date.now();
-
                     const tryFetch = async (url, type) => {
-                        console.log(`[Weather] Attempting ${type} fetch: ${url}`);
                         const res = await fetch(url);
-                        if (!res.ok) throw new Error(`${type} fetch failed: ${res.status} ${res.statusText}`);
-                        const data = await res.json();
-                        console.log(`[Weather] ${type} fetch successful in ${Date.now() - startTime}ms`);
-                        return data;
+                        if (!res.ok) throw new Error(`${type} fetch failed: ${res.status}`);
+                        return await res.json();
                     };
 
                     try {
-                        // Attempt 1: Direct
                         omData = await tryFetch(omApiUrl, "Direct");
                     } catch (e1) {
-                        console.warn("[Weather] Direct fetch failed:", e1.message);
-                        lastError = e1;
-                        
-                        try {
-                            // Attempt 2: AllOrigins
-                            setLookupMessage("Fetching data (Proxy A)...");
-                            const proxyA = `https://api.allorigins.win/get?url=${encodeURIComponent(omApiUrl)}`;
-                            const resp = await tryFetch(proxyA, "AllOrigins");
-                            omData = JSON.parse(resp.contents);
-                        } catch (e2) {
-                            console.warn("[Weather] AllOrigins failed:", e2.message);
-                            lastError = e2;
-
-                            try {
-                                // Attempt 3: CorsProxy.io
-                                setLookupMessage("Fetching data (Proxy B)...");
-                                const proxyB = `https://corsproxy.io/?${encodeURIComponent(omApiUrl)}`;
-                                omData = await tryFetch(proxyB, "CorsProxy");
-                            } catch (e3) {
-                                console.error("[Weather] All attempts failed.");
-                                lastError = e3;
-                            }
-                        }
+                        setLookupMessage("Fetching data (via proxy)...");
+                        const proxyA = `https://api.allorigins.win/get?url=${encodeURIComponent(omApiUrl)}`;
+                        const resp = await tryFetch(proxyA, "Proxy");
+                        omData = JSON.parse(resp.contents);
                     }
                     
-                    if (!omData || !omData.hourly || !omData.hourly.temperature_2m) {
-                        throw new Error(`All weather data sources failed. Last error: ${lastError ? lastError.message : 'Unknown'}`);
-                    }
+                    if (!omData || !omData.hourly || !omData.hourly.temperature_2m) throw new Error("Invalid weather data");
 
-                    setLookupMessage("Parsing 8,760 hours of climate data...");
-                    setLoadProgress(95);
+                    setLoadProgress(80);
 
-                    // 3. Process Open-Meteo JSON into bins
+                    // 3. Process Climate Data into bins
                     const temperatures = omData.hourly.temperature_2m;
-                    console.log(`[Weather] Received ${temperatures.length} hourly data points.`);
                     const bins = {};
                     for (let i = -50; i <= 125; i++) bins[i] = 0;
-                    
                     temperatures.forEach(tempC => {
                         const tempF = Math.round(tempC * 9/5 + 32);
-                        if (tempF >= -50 && tempF <= 125) {
-                            bins[tempF]++;
-                        }
+                        if (tempF >= -50 && tempF <= 125) bins[tempF]++;
                     });
-
                     const binnedData = [];
-                    for (let i = -20; i <= 75; i++) {
-                        binnedData.push({ temp: i, hours: bins[i] || 0 });
-                    }
-                    
+                    for (let i = -20; i <= 75; i++) binnedData.push({ temp: i, hours: bins[i] || 0 });
                     setFetchedBinData(binnedData);
-                    
-                    // 4. Save to Cache
-                    localStorage.setItem(cacheKey, JSON.stringify(binnedData));
+
+                    // 4. Fetch EIA Prices
+                    const prefix = zipCode.substring(0, 2);
+                    const stateCode = ZIP_TO_STATE[prefix];
+                    let eiaPricesResults = null;
+                    let detectedPriceSource = 'regional';
+
+                    if (stateCode) {
+                        setLookupMessage(`Fetching latest ${stateCode} energy prices...`);
+                        try {
+                            eiaPricesResults = await fetchEiaPrices(stateCode);
+                            if (eiaPricesResults && (eiaPricesResults.electricity || eiaPricesResults.gas || eiaPricesResults.oil)) {
+                                detectedPriceSource = 'eia';
+                            }
+                        } catch (eiaErr) {
+                            console.warn("EIA fetch failed", eiaErr);
+                        }
+                    }
+
+                    applyRates(stateCode, eiaPricesResults, detectedPriceSource);
+
+                    // 5. Save to Cache
+                    const cacheData = {
+                        binnedData: binnedData,
+                        eiaPrices: eiaPricesResults,
+                        priceSource: detectedPriceSource,
+                        timestamp: Date.now()
+                    };
+                    localStorage.setItem(cacheKey, JSON.stringify(cacheData));
                     const count = Object.keys(localStorage).filter(k => k.startsWith('tmy_v4_')).length;
                     setCacheSize(count);
 
                     setLoadProgress(100);
-                    setLookupMessage("TMY data loaded and cached successfully.");
+                    setLookupMessage(`Data for ${zipCode} loaded successfully.`);
                     setCurrentView(2);
                 } catch (err) {
-                    console.error("[TMY] Final Error Detail:", {
-                        message: err.message,
-                        stack: err.stack,
-                        zip: zipCode,
-                        time: new Date().toISOString()
-                    });
+                    console.error("Lookup failed:", err);
                     setLookupMessage(`Error: ${err.message}. Using fallback model.`);
                     setFetchedBinData(null);
                     setCurrentView(2);
@@ -974,9 +1042,22 @@
                                                 <button onClick={(e) => handleZipLookup(e, false, true)} disabled={isLoadingData || !zipCode} className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors whitespace-nowrap font-medium flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed" title="Use this if you have enabled CORS in about:config or an extension">
                                                     Direct Fetch
                                                 </button>
-                                            </div>
-                                            {isLoadingData && (
-                                                <div className="w-full md:max-w-md mt-2">
+                                                </div>
+
+                                                {/* Data Status Indicators */}
+                                                {activeZipCode && (
+                                                    <div className="flex flex-wrap gap-2 mt-2">
+                                                        <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border shadow-sm ${isUsingFallback ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
+                                                            <Icon name={isUsingFallback ? "Settings" : "CheckSquare"} size={10} />
+                                                            Climate: {isUsingFallback ? 'Fallback Model (Regional)' : 'Loaded from Historic Data (2025)' }
+                                                        </div>
+                                                        <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border shadow-sm ${priceSource === 'regional' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
+                                                            <Icon name={priceSource === 'regional' ? "Settings" : "CheckSquare"} size={10} />
+                                                            Energy Rates: {priceSource === 'regional' ? 'Fallback Model (Regional)' : `Loaded from Current Monthly Data (EIA ${ZIP_TO_STATE[activeZipCode.substring(0,2)] || ''})` }
+                                                        </div>
+                                                    </div>
+                                                )}
+                                                {isLoadingData && (                                                <div className="w-full md:max-w-md mt-2">
                                                     <div className="w-full bg-slate-100 dark:bg-slate-700 rounded-full h-2 overflow-hidden">
                                                         <div className="bg-blue-600 h-full transition-all duration-300 ease-out" style={{ width: `${loadProgress}%` }}></div>
                                                     </div>
@@ -1106,7 +1187,7 @@
                                             </div>
                                             <p className="text-sm text-slate-500 dark:text-slate-400 mt-2 max-w-3xl leading-relaxed">
                                                 {isUsingFallback ? (
-                                                    <span><strong>Note:</strong> We are currently using a <strong>statistical approximation</strong> of a typical winter for your region. For more accurate results, use the ZIP lookup to fetch empirical TMY data.</span>
+                                                    <span><strong>Note:</strong> We are currently using a <strong>statistical approximation</strong> of a typical winter for your region. For more accurate results, use the ZIP lookup to fetch historic weather data.</span>
                                                 ) : (
                                                     <span>Heating stops above your <strong>balance point</strong> ({Math.round(balancePoint)}°F) because things like your stove, the sun, and even the people in your household add heat.</span>
                                                 )}
