@@ -603,7 +603,6 @@
                     setLookupMessage("Error: Please enter a valid 5-digit ZIP code.");
                     return;
                 }
-                setZipCode(cleanZip); // Update state with sanitized version
                 
                 const applyRates = (state, prices = null, source = 'regional') => {
                     const prefix = cleanZip.substring(0, 2);
@@ -630,7 +629,7 @@
                 };
 
                 // 0. Check Cache
-                const cacheKey = `tmy_v4_${zipCode}`;
+                const cacheKey = `tmy_v4_${cleanZip}`;
                 if (!forceRefresh) {
                     const cached = localStorage.getItem(cacheKey);
                     if (cached) {
@@ -642,13 +641,14 @@
                             const source = parsed.priceSource || 'regional';
                             
                             setFetchedBinData(binned);
-                            setActiveZipCode(zipCode);
+                            setActiveZipCode(cleanZip);
+                            setZipCode(cleanZip);
                             
-                            const prefix = zipCode.substring(0, 2);
+                            const prefix = cleanZip.substring(0, 2);
                             const stateCode = ZIP_TO_STATE[prefix];
                             applyRates(stateCode, eiaPrices, source);
 
-                            setLookupMessage("Loaded data for " + $zipCode + " from local cache.");
+                            setLookupMessage(`Loaded data for ${cleanZip} from local cache.`);
                             setCurrentView(2);
                             return;
                         } catch (e) {
@@ -660,7 +660,8 @@
                 setIsLoadingData(true);
                 setLoadProgress(5);
                 setLookupMessage(useProxy ? "Geolocating ZIP code..." : "Geolocating ZIP code (direct)...");
-                setActiveZipCode(zipCode);
+                setActiveZipCode(cleanZip);
+                setZipCode(cleanZip);
 
                 // Simulated progress timer
                 const progressInterval = setInterval(() => {
@@ -672,7 +673,7 @@
 
                 try {
                     // 1. Geolocate ZIP to Lat/Lon
-                    const geoRes = await fetch(`https://nominatim.openstreetmap.org/search?postalcode=${zipCode}&country=US&format=json`, {
+                    const geoRes = await fetch(`https://nominatim.openstreetmap.org/search?postalcode=${cleanZip}&country=US&format=json`, {
                         headers: { 'Accept': 'application/json' }
                     });
                     const geoData = await geoRes.json();
@@ -718,7 +719,7 @@
                     setFetchedBinData(binnedData);
 
                     // 4. Fetch EIA Prices
-                    const prefix = zipCode.substring(0, 2);
+                    const prefix = cleanZip.substring(0, 2);
                     const stateCode = ZIP_TO_STATE[prefix];
                     let eiaPricesResults = null;
                     let detectedPriceSource = 'regional';
@@ -727,7 +728,7 @@
                         setLookupMessage(`Fetching latest ${stateCode} energy prices...`);
                         try {
                             eiaPricesResults = await fetchEiaPrices(stateCode);
-                            if (eiaPricesResults && (eiaPricesResults.electricity || eiaPricesResults.gas || eiaPricesResults.oil)) {
+                            if (eiaPricesResults && (eiaPricesResults.electricity || eiaPricesResults.gas || eiaPricesResults.oil || eiaPricesResults.propane)) {
                                 detectedPriceSource = 'eia';
                             }
                         } catch (eiaErr) {
@@ -749,7 +750,7 @@
                     setCacheSize(count);
 
                     setLoadProgress(100);
-                    setLookupMessage(`Data for ${zipCode} loaded successfully.`);
+                    setLookupMessage(`Data for ${cleanZip} loaded successfully.`);
                     setCurrentView(2);
                 } catch (err) {
                     console.error("Lookup failed:", err);
