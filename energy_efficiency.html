@@ -521,9 +521,27 @@
                 return data;
             }, [effectiveElecPrice, efficiency, activeCurve, oilCostAtEfficiency, gasCostAtEfficiency]);
 
-            const hpVsGasBalance = useMemo(() => graphData_Across.find(d => d.hp <= d.gas)?.temp ?? "< -20", [graphData_Across]);
-            const hpVsOilBalance = useMemo(() => graphData_Across.find(d => d.hp <= d.oil)?.temp ?? "< -20", [graphData_Across]);
+            const hpVsGasBalance = useMemo(() => {
+                // Check from coldest to warmest to find where HP becomes cheaper than Gas
+                // If Gas is cheaper even at 75F, balance is > Setpoint
+                const temps = [];
+                for (let t = -20; t <= 75; t++) temps.push(t);
 
+                const firstHPCheaper = temps.find(t => (effectiveElecPrice / getCOP(t, activeCurve)) <= gasCostAtEfficiency(efficiency));
+                if (firstHPCheaper === undefined) return `> ${heatingSetpoint}`; // HP is never cheaper
+                if (firstHPCheaper <= -20) return "< -20"; // HP is always cheaper
+                return firstHPCheaper;
+            }, [effectiveElecPrice, efficiency, activeCurve, gasCostAtEfficiency, heatingSetpoint]);
+
+            const hpVsOilBalance = useMemo(() => {
+                const temps = [];
+                for (let t = -20; t <= 75; t++) temps.push(t);
+
+                const firstHPCheaper = temps.find(t => (effectiveElecPrice / getCOP(t, activeCurve)) <= oilCostAtEfficiency(efficiency));
+                if (firstHPCheaper === undefined) return `> ${heatingSetpoint}`;
+                if (firstHPCheaper <= -20) return "< -20";
+                return firstHPCheaper;
+            }, [effectiveElecPrice, efficiency, activeCurve, oilCostAtEfficiency, heatingSetpoint]);
             const hpCheaperPercentage = useMemo(() => {
                 let totalHeatingHours = 0;
                 let hpCheaperHours = 0;
