@@ -27,8 +27,9 @@ jobs:
       - name: Inject Secrets into HTML
         run: |
           # Replaces the placeholders in your HTML with the actual secrets from GitHub
-          sed -i "s/NREL_API_KEY_PLACEHOLDER/${{ secrets.NREL_API_KEY }}/g" energy_efficiency.html
-          sed -i "s/USER_EMAIL_PLACEHOLDER/${{ secrets.USER_EMAIL }}/g" energy_efficiency.html
+          sed -i "s|NREL_API_KEY_PLACEHOLDER|${{ secrets.NREL_API_KEY }}|g" energy_efficiency.html
+          sed -i "s|USER_EMAIL_PLACEHOLDER|${{ secrets.USER_EMAIL }}|g" energy_efficiency.html
+          sed -i "s|EIA_API_KEY_PLACEHOLDER|${{ secrets.EIA_API_KEY }}|g" energy_efficiency.html
 
       - name: Prepare for Pages
         # Renaming the file to index.html ensures it loads as your site's home page
