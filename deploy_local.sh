@@ -14,7 +14,7 @@ mkdir -p ./local_test_site
 # Function to build the local site
 build_site() {
     echo "[Build] Injecting secrets and preparing index.html..."
-    sed "s|NREL_API_KEY_PLACEHOLDER|$NREL_API_KEY|g; s|USER_EMAIL_PLACEHOLDER|$USER_EMAIL|g; s|EIA_API_KEY_PLACEHOLDER|$EIA_API_KEY|g" energy_efficiency.html > ./local_test_site/index.html
+    sed "s|NREL_API_KEY_PLACEHOLDER|$NREL_API_KEY|g; s|USER_EMAIL_PLACEHOLDER|$USER_EMAIL|g; s|EIA_API_KEY_PLACEHOLDER|$EIA_API_KEY|g; s|ATTOM_API_KEY_PLACEHOLDER|$ATTOM_API_KEY|g; s|RENTCAST_API_KEY_PLACEHOLDER|$RENTCAST_API_KEY|g" energy_efficiency.html > ./local_test_site/index.html
     echo "[Build] Done. Last build: $(date +%H:%M:%S)"
 }
 

@@ -44,6 +44,8 @@
         const { useState, useMemo, useRef, useCallback, useEffect } = React;
 
         const EIA_API_KEY = 'EIA_API_KEY_PLACEHOLDER';
+        const ATTOM_API_KEY = 'ATTOM_API_KEY_PLACEHOLDER';
+        const RENTCAST_API_KEY = 'RENTCAST_API_KEY_PLACEHOLDER';
 
         const ZIP_TO_STATE = {
             '01': 'MA', '02': 'MA', '03': 'NH', '04': 'ME', '05': 'VT', '06': 'CT', '07': 'NJ', '08': 'NJ',
@@ -107,6 +109,79 @@
                 console.error("EIA Price Fetch Error:", msg);
             }
             return results;
+        };
+
+        const fetchPropertyData = async (address) => {
+            if (!address || address.length < 5) return null;
+            
+            const hasAttom = ATTOM_API_KEY && !ATTOM_API_KEY.includes('PLACEHOLDER');
+            const hasRentcast = RENTCAST_API_KEY && !RENTCAST_API_KEY.includes('PLACEHOLDER');
+            
+            if (!hasAttom && hasRentcast) {
+                // We'll proceed if at least one is available
+            } else if (!hasAttom && !hasRentcast) {
+                console.warn("Property lookup skipped: No API keys provided.");
+                return { error: 'No API keys' };
+            }
+
+            const cacheKey = `prop_v1_${address.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+            const cached = localStorage.getItem(cacheKey);
+            if (cached) return JSON.parse(cached);
+
+            let result = { sqft: null, yearBuilt: null, source: null };
+
+            // 1. Try ATTOM
+            if (ATTOM_API_KEY && !ATTOM_API_KEY.includes('PLACEHOLDER')) {
+                try {
+                    const url = `https://api.gateway.attomdata.com/propertyapi/v1.0.0/property/basicprofile?address=${encodeURIComponent(address)}`;
+                    const res = await fetch(url, {
+                        headers: { 'apikey': ATTOM_API_KEY, 'Accept': 'application/json' }
+                    });
+                    if (res.ok) {
+                        const data = await res.json();
+                        console.log("[Property] ATTOM raw response:", data);
+                        if (data.property && data.property.length > 0) {
+                            const p = data.property[0];
+                            result = { 
+                                sqft: p.building?.size?.universalSize || p.building?.size?.livingSize, 
+                                yearBuilt: p.summary?.yearBuilt,
+                                fuel: p.utilities?.heatingFuel,
+                                source: 'ATTOM'
+                            };
+                        }
+                    }
+                } catch (err) { 
+                    const msg = err.message ? err.message.replace(/apikey=[^&]*/g, 'apikey=REDACTED') : "ATTOM Error";
+                    console.warn("[Property] ATTOM failed:", msg); 
+                }
+            }
+
+            // 2. Fallback to RentCast
+            if (!result.sqft && RENTCAST_API_KEY && !RENTCAST_API_KEY.includes('PLACEHOLDER')) {
+                try {
+                    const url = `https://api.rentcast.io/v1/properties?address=${encodeURIComponent(address)}`;
+                    const res = await fetch(url, {
+                        headers: { 'X-Api-Key': RENTCAST_API_KEY, 'Accept': 'application/json' }
+                    });
+                    if (res.ok) {
+                        const data = await res.json();
+                        console.log("[Property] RentCast raw response:", data);
+                        if (data && data.length > 0) {
+                            result = {
+                                sqft: data[0].squareFootage,
+                                yearBuilt: data[0].yearBuilt,
+                                source: 'RentCast'
+                            };
+                        }
+                    }
+                } catch (err) { 
+                    // RentCast uses a header, but we'll sanitize the error anyway
+                    console.warn("[Property] RentCast failed:", err.message); 
+                }
+            }
+
+            if (result.sqft) localStorage.setItem(cacheKey, JSON.stringify(result));
+            return result;
         };
 
         const Icon = ({ name, size = 20, className = "" }) => {
@@ -282,12 +357,17 @@
 
             // --- States ---
             const [zipCode, setZipCode] = useState('');
+            const [address, setAddress] = useState('');
             const [activeZipCode, setActiveZipCode] = useState('');
+            const [activeAddress, setActiveAddress] = useState('');
             const [lookupMessage, setLookupMessage] = useState('');
             const [isLoadingData, setIsLoadingData] = useState(false);
             const [loadProgress, setLoadProgress] = useState(0);
+            const [zipCacheCount, setZipCacheCount] = useState(0);
+            const [addrCacheCount, setAddrCacheCount] = useState(0);
             const [fetchedBinData, setFetchedBinData] = useState(null);
             const [priceSource, setPriceSource] = useState('regional'); // 'regional' or 'eia'
+            const [propSource, setPropSource] = useState('none'); // 'none', 'cached', 'attom', 'rentcast'
             const [homeSize, setHomeSize] = useState('medium');
             const [homeInsulation, setHomeInsulation] = useState('average');
             const [primaryHeating, setPrimaryHeating] = useState('gas');
@@ -314,19 +394,28 @@
             const [oilPrice, setOilPrice] = useState(3.80);
             const [gasPrice, setGasPrice] = useState(1.40);
             const [propanePrice, setPropanePrice] = useState(3.50);
-            const [outTemp, setOutTemp] = useState(30);            const [cacheSize, setCacheSize] = useState(0);
+            const [outTemp, setOutTemp] = useState(30);
+            const [cacheSize, setCacheSize] = useState(0);
             
             const svgRef = useRef(null);
             const [isDragging, setIsDragging] = useState(false);
+
+            const cleanZip = useMemo(() => zipCode.trim().replace(/\D/g, ''), [zipCode]);
+            const hasPropKey = (ATTOM_API_KEY && !ATTOM_API_KEY.includes('PLACEHOLDER')) || (RENTCAST_API_KEY && !RENTCAST_API_KEY.includes('PLACEHOLDER'));
 
             const isFossilFuel = primaryHeating === 'gas' || primaryHeating === 'oil' || primaryHeating === 'propane';
             const isFossilFuel_Inner = primaryHeating === 'gas' || primaryHeating === 'oil' || primaryHeating === 'propane';
 
             // --- Effects ---
-            useEffect(() => {
-                const count = Object.keys(localStorage).filter(k => k.startsWith('tmy_v4_')).length;
-                setCacheSize(count);
+            const updateCacheCounts = useCallback(() => {
+                const keys = Object.keys(localStorage);
+                setZipCacheCount(keys.filter(k => k.startsWith('tmy_v4_')).length);
+                setAddrCacheCount(keys.filter(k => k.startsWith('prop_v1_')).length);
             }, []);
+
+            useEffect(() => {
+                updateCacheCounts();
+            }, [updateCacheCounts]);
 
             useEffect(() => { setInternalGains(DEFAULT_GAINS_BY_SIZE[homeSize]); }, [homeSize]);
             useEffect(() => { if (!changeSetpoint) setUpgradedSetpoint(heatingSetpoint - 2); }, [heatingSetpoint]);
@@ -590,15 +679,14 @@
             // --- Handlers ---
             const clearCache = () => {
                 Object.keys(localStorage).forEach(k => {
-                    if (k.startsWith('tmy_v4_')) localStorage.removeItem(k);
+                    if (k.startsWith('tmy_v4_') || k.startsWith('prop_v1_')) localStorage.removeItem(k);
                 });
-                setCacheSize(0);
+                updateCacheCounts();
                 alert("Cache cleared");
             };
 
             const handleZipLookup = async (e, useProxy = true, forceRefresh = false) => {
-                // Sanitize and Validate
-                const cleanZip = zipCode.trim().replace(/\D/g, '');
+                // Validate
                 if (cleanZip.length !== 5) {
                     setLookupMessage("Error: Please enter a valid 5-digit ZIP code.");
                     return;
@@ -628,17 +716,18 @@
                     setPriceSource(source);
                 };
 
-                // 0. Check Cache
-                const cacheKey = `tmy_v4_${cleanZip}`;
+                // 0. Check Caches
+                const zipCacheKey = `tmy_v4_${cleanZip}`;
+                const addrCacheKey = address ? `prop_v1_${address.toLowerCase().replace(/[^a-z0-9]/g, '')}` : null;
+                
                 if (!forceRefresh) {
-                    const cached = localStorage.getItem(cacheKey);
-                    if (cached) {
+                    const cachedZip = localStorage.getItem(zipCacheKey);
+                    if (cachedZip) {
                         try {
-                            const parsed = JSON.parse(cached);
-                            // Handle both old (array) and new (object) cache formats
-                            const binned = Array.isArray(parsed) ? parsed : parsed.binnedData;
-                            const eiaPrices = parsed.eiaPrices || null;
-                            const source = parsed.priceSource || 'regional';
+                            const parsedZip = JSON.parse(cachedZip);
+                            const binned = Array.isArray(parsedZip) ? parsedZip : parsedZip.binnedData;
+                            const eiaPrices = parsedZip.eiaPrices || null;
+                            const source = parsedZip.priceSource || 'regional';
                             
                             setFetchedBinData(binned);
                             setActiveZipCode(cleanZip);
@@ -648,7 +737,39 @@
                             const stateCode = ZIP_TO_STATE[prefix];
                             applyRates(stateCode, eiaPrices, source);
 
-                            setLookupMessage(`Loaded data for ${cleanZip} from local cache.`);
+                            setLookupMessage(`Loaded ZIP data for ${cleanZip}.`);
+
+                            // Now check for address-specific cache
+                            if (addrCacheKey) {
+                                const cachedAddr = localStorage.getItem(addrCacheKey);
+                                if (cachedAddr) {
+                                    const parsedAddr = JSON.parse(cachedAddr);
+                                    if (parsedAddr.address) {
+                                        setAddress(parsedAddr.address);
+                                        setActiveAddress(parsedAddr.address);
+                                    }
+                                    if (parsedAddr.sqft) {
+                                        if (parsedAddr.sqft < 1500) setHomeSize('small');
+                                        else if (parsedAddr.sqft < 3000) setHomeSize('medium');
+                                        else setHomeSize('large');
+                                    }
+                                    if (parsedAddr.yearBuilt) {
+                                        if (parsedAddr.yearBuilt < 1970) setHomeInsulation('poor');
+                                        else if (parsedAddr.yearBuilt < 2000) setHomeInsulation('average');
+                                        else setHomeInsulation('excellent');
+                                    }
+                                    if (parsedAddr.fuel) {
+                                        const fuel = parsedAddr.fuel.toUpperCase();
+                                        if (fuel.includes('GAS')) setPrimaryHeating('gas');
+                                        else if (fuel.includes('OIL')) setPrimaryHeating('oil');
+                                        else if (fuel.includes('PROPANE') || fuel.includes('BOTTLE')) setPrimaryHeating('propane');
+                                        else if (fuel.includes('ELEC')) setPrimaryHeating('electric');
+                                    }
+                                    setPropSource('cached');
+                                    setLookupMessage(`Loaded all data for ${parsedAddr.address} from cache.`);
+                                }
+                            }
+
                             setCurrentView(2);
                             return;
                         } catch (e) {
@@ -672,21 +793,68 @@
                 }, 400);
 
                 try {
-                    // 1. Geolocate ZIP to Lat/Lon
-                    const geoRes = await fetch(`https://nominatim.openstreetmap.org/search?postalcode=${cleanZip}&country=US&format=json`, {
-                        headers: { 'Accept': 'application/json' }
-                    });
-                    const geoData = await geoRes.json();
-                    if (!geoData || geoData.length === 0) throw new Error("ZIP code not found");
-                    const { lat, lon } = geoData[0];
-                    setLoadProgress(20);
+                    // 1. Validate / Standardize Address (if provided)
+                    let standardizedAddress = null;
+                    let validatedLat = null;
+                    let validatedLon = null;
 
-                    // 2. Fetch climate data
+                    if (address && address.length > 5) {
+                        setLookupMessage(`Validating address: ${address}...`);
+                        const searchUrl = `https://nominatim.openstreetmap.org/search?street=${encodeURIComponent(address)}&postalcode=${cleanZip}&country=US&format=json&addressdetails=1`;
+                        const searchRes = await fetch(searchUrl, { headers: { 'Accept': 'application/json' } });
+                        const searchData = await searchRes.json();
+                        
+                        if (!searchData || searchData.length === 0) {
+                            throw new Error(`Could not validate address "${address}" in ZIP ${cleanZip}.`);
+                        }
+
+                        const matched = searchData[0];
+                        const addr = matched.address;
+                        
+                        // Validation A: ZIP Code Match
+                        // Nominatim sometimes returns nearby ZIPs if the street crosses boundaries
+                        const nomZip = addr.postcode || '';
+                        if (!nomZip.startsWith(cleanZip.substring(0, 3))) {
+                            throw new Error(`Address "${address}" appears to be in ZIP ${nomZip}, which doesn't match ${cleanZip}.`);
+                        }
+
+                        // Validation B: Building Category
+                        // We want houses, apartments, buildings, etc. 
+                        // Nominatim uses 'class' and 'type'
+                        const validTypes = ['house', 'building', 'residential', 'apartments', 'terrace', 'detached', 'semidetached_house'];
+                        if (!validTypes.includes(matched.type) && matched.class !== 'building') {
+                            console.warn("[Validation] Non-residential type detected:", matched.type, matched.class);
+                            // We'll allow it but log a warning, or throw if you want to be strict:
+                            // throw new Error("Provided address does not appear to be a residential building.");
+                        }
+
+                        standardizedAddress = `${addr.house_number || ''} ${addr.road || ''}, ${addr.city || addr.town || addr.village || ''}, ${addr.state || ''} ${addr.postcode || cleanZip}`.trim().replace(/^,/, '').trim();
+                        validatedLat = matched.lat;
+                        validatedLon = matched.lon;
+                        
+                        setAddress(standardizedAddress);
+                        setActiveAddress(standardizedAddress);
+                        setLoadProgress(15);
+                    }
+
+                    // 2. Geolocate ZIP (if no address validation was done)
+                    if (!validatedLat || !validatedLon) {
+                        setLookupMessage(useProxy ? "Geolocating ZIP code..." : "Geolocating ZIP code (direct)...");
+                        const geoRes = await fetch(`https://nominatim.openstreetmap.org/search?postalcode=${cleanZip}&country=US&format=json`, {
+                            headers: { 'Accept': 'application/json' }
+                        });
+                        const geoData = await geoRes.json();
+                        if (!geoData || geoData.length === 0) throw new Error("ZIP code not found");
+                        validatedLat = geoData[0].lat;
+                        validatedLon = geoData[0].lon;
+                    }
+                    setLoadProgress(30);
+
+                    // 3. Fetch climate data
                     setLookupMessage("Fetching 2025 climate data...");
-                    const omApiUrl = `https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lon}&start_date=2025-01-01&end_date=2025-12-31&hourly=temperature_2m`;
+                    const omApiUrl = `https://archive-api.open-meteo.com/v1/archive?latitude=${validatedLat}&longitude=${validatedLon}&start_date=2025-01-01&end_date=2025-12-31&hourly=temperature_2m`;
                     
                     let omData = null;
-                    const startTime = Date.now();
                     const tryFetch = async (url, type) => {
                         const res = await fetch(url);
                         if (!res.ok) throw new Error(`${type} fetch failed: ${res.status}`);
@@ -704,9 +872,9 @@
                     
                     if (!omData || !omData.hourly || !omData.hourly.temperature_2m) throw new Error("Invalid weather data");
 
-                    setLoadProgress(80);
+                    setLoadProgress(70);
 
-                    // 3. Process Climate Data into bins
+                    // 4. Process Climate Data into bins
                     const temperatures = omData.hourly.temperature_2m;
                     const bins = {};
                     for (let i = -50; i <= 125; i++) bins[i] = 0;
@@ -718,7 +886,7 @@
                     for (let i = -20; i <= 75; i++) binnedData.push({ temp: i, hours: bins[i] || 0 });
                     setFetchedBinData(binnedData);
 
-                    // 4. Fetch EIA Prices
+                    // 5. Fetch EIA Prices
                     const prefix = cleanZip.substring(0, 2);
                     const stateCode = ZIP_TO_STATE[prefix];
                     let eiaPricesResults = null;
@@ -738,19 +906,66 @@
 
                     applyRates(stateCode, eiaPricesResults, detectedPriceSource);
 
-                    // 5. Save to Cache
-                    const cacheData = {
+                    // 6. Fetch Property Details (if address validated)
+                    let finalPropData = null;
+                    setPropSource('none');
+
+                    if (standardizedAddress) {
+                        setLookupMessage(`Fetching structural details...`);
+                        try {
+                            const propData = await fetchPropertyData(standardizedAddress);
+                            if (propData && propData.sqft) {
+                                finalPropData = {
+                                    address: standardizedAddress,
+                                    sqft: propData.sqft,
+                                    yearBuilt: propData.yearBuilt,
+                                    fuel: propData.fuel
+                                };
+                                setPropSource(propData.source ? propData.source.toLowerCase() : 'cached');
+
+                                // Map SqFt to Home Size
+                                if (propData.sqft < 1500) setHomeSize('small');
+                                else if (propData.sqft < 3000) setHomeSize('medium');
+                                else setHomeSize('large');
+
+                                // Map YearBuilt to Insulation
+                                if (propData.yearBuilt) {
+                                    if (propData.yearBuilt < 1970) setHomeInsulation('poor');
+                                    else if (propData.yearBuilt < 2000) setHomeInsulation('average');
+                                    else setHomeInsulation('excellent');
+                                }
+
+                                // Map Fuel Type to Primary Heating
+                                if (propData.fuel) {
+                                    const fuel = propData.fuel.toUpperCase();
+                                    if (fuel.includes('GAS')) setPrimaryHeating('gas');
+                                    else if (fuel.includes('OIL')) setPrimaryHeating('oil');
+                                    else if (fuel.includes('PROPANE') || fuel.includes('BOTTLE')) setPrimaryHeating('propane');
+                                    else if (fuel.includes('ELEC')) setPrimaryHeating('electric');
+                                }
+                            }
+                        } catch (propErr) {
+                            console.warn("Structural fetch failed", propErr);
+                        }
+                    }
+
+                    // 7. Save to Caches
+                    const zipCacheData = {
                         binnedData: binnedData,
                         eiaPrices: eiaPricesResults,
                         priceSource: detectedPriceSource,
                         timestamp: Date.now()
                     };
-                    localStorage.setItem(cacheKey, JSON.stringify(cacheData));
-                    const count = Object.keys(localStorage).filter(k => k.startsWith('tmy_v4_')).length;
-                    setCacheSize(count);
+                    localStorage.setItem(zipCacheKey, JSON.stringify(zipCacheData));
+                    
+                    if (finalPropData) {
+                        localStorage.setItem(addrCacheKey, JSON.stringify(finalPropData));
+                    }
+
+                    updateCacheCounts();
 
                     setLoadProgress(100);
-                    setLookupMessage(`Data for ${cleanZip} loaded successfully.`);
+                    setLookupMessage(`Data for ${finalPropData ? finalPropData.address : cleanZip} loaded successfully.`);
                     setCurrentView(2);
                 } catch (err) {
                     console.error("Lookup failed:", err);
@@ -1063,18 +1278,19 @@
                                 <h1 className="text-3xl font-bold text-slate-900 dark:text-white flex items-center gap-3">
                                     <Icon name="TrendingUp" className="text-blue-600" size={32} /> Heating Cost Comparator
                                 </h1>
-                                {cacheSize > 0 && (
+                                {(zipCacheCount > 0 || addrCacheCount > 0) && (
                                     <div className="flex items-center gap-2 px-3 py-1 bg-slate-100 dark:bg-slate-700 rounded-full text-[10px] font-bold text-slate-500 uppercase">
-                                        <span>{cacheSize} ZIPs Cached</span>
-                                        <button onClick={clearCache} className="text-red-500 hover:text-red-700 ml-1 border-l pl-2 dark:border-slate-600">Clear</button>
+                                        <span>{zipCacheCount} ZIPs • {addrCacheCount} Addresses Cached</span>
+                                        <button onClick={clearCache} className="text-red-500 hover:text-red-700 ml-1 border-l pl-2 dark:border-slate-600">Clear All</button>
                                     </div>
                                 )}
-                            </div>
-                            {currentView > 1 && (
+                                </div>                            {currentView > 1 && (
                                 <button onClick={() => {
                                     setCurrentView(1);
                                     setActiveZipCode('');
+                                    setActiveAddress('');
                                     setZipCode('');
+                                    setAddress('');
                                     setLookupMessage('');
                                     setFetchedBinData(null);
                                 }} className="text-sm font-bold text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 transition-colors flex items-center gap-1">
@@ -1095,18 +1311,26 @@
                                     <SliderControl iconName="ThermometerSnowflake" label="Heating Setpoint" value={heatingSetpoint} min={50} max={75} step={1} unit="°F" onChange={setHeatingSetpoint} colorClass="text-orange-500" />
 
                                     <div className="md:col-span-2">
-                                        <label className="flex items-center gap-2 font-medium mb-2 dark:text-slate-200"><Icon name="MapPin" size={18} className="text-slate-500"/> Location (ZIP Code)</label>
-                                        <div className="flex flex-col gap-2">
+                                        <label className="flex items-center gap-2 font-medium mb-2 dark:text-slate-200"><Icon name="MapPin" size={18} className="text-slate-500"/> Location {hasPropKey && "& Property (Optional)"}</label>
+                                        <div className="flex flex-col gap-3">
                                             <div className="flex flex-wrap gap-2">
-                                                <input type="text" value={zipCode} onChange={e => setZipCode(e.target.value)} disabled={isLoadingData} placeholder="e.g. 02138" className="w-full md:max-w-xs px-3 py-2 border rounded-lg bg-white dark:bg-slate-900 dark:text-white dark:border-slate-700 focus:ring-2 focus:ring-blue-500 outline-none disabled:opacity-50"/>
+                                                <div className={`flex-1 ${hasPropKey ? 'min-w-[200px]' : 'md:max-w-xs'}`}>
+                                                    <input type="text" value={zipCode} onChange={e => setZipCode(e.target.value)} disabled={isLoadingData} placeholder="ZIP Code (e.g. 02138)" className="w-full px-3 py-2 border rounded-lg bg-white dark:bg-slate-900 dark:text-white dark:border-slate-700 focus:ring-2 focus:ring-blue-500 outline-none disabled:opacity-50"/>
+                                                </div>
+                                                {hasPropKey && (
+                                                    <div className="flex-[2] min-w-[280px]">
+                                                        <input type="text" value={address} onChange={e => setAddress(e.target.value)} disabled={isLoadingData} placeholder="Street Address (Optional, for SqFt lookup)" className="w-full px-3 py-2 border rounded-lg bg-white dark:bg-slate-900 dark:text-white dark:border-slate-700 focus:ring-2 focus:ring-blue-500 outline-none disabled:opacity-50"/>
+                                                    </div>
+                                                )}
                                                 <button 
                                                     onClick={(e) => handleZipLookup(e, true, false)} 
-                                                    disabled={isLoadingData || zipCode.length < 5 || (activeZipCode === zipCode.trim())} 
+                                                    disabled={isLoadingData || zipCode.length < 5 || (activeZipCode === cleanZip && activeAddress === address.trim())} 
                                                     className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition-colors whitespace-nowrap font-bold flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
                                                 >
                                                     {isLoadingData ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Icon name="TrendingUp" size={18} />}
                                                     Load data
-                                                </button>                                                {activeZipCode && activeZipCode === zipCode.trim() && !isLoadingData && (
+                                                </button>
+                                                {activeZipCode && activeZipCode === cleanZip && activeAddress === address.trim() && !isLoadingData && (
                                                     <button 
                                                         onClick={(e) => handleZipLookup(e, true, true)} 
                                                         className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors group" 
@@ -1129,8 +1353,11 @@
                                                             <Icon name={priceSource === 'regional' ? "Settings" : "CheckSquare"} size={10} />
                                                             Energy Rates: {priceSource === 'regional' ? 'Fallback Model (Regional)' : `Loaded from Current Monthly Data (EIA ${ZIP_TO_STATE[activeZipCode.substring(0,2)] || ''})` }
                                                         </div>
-                                                    </div>
-                                                )}
+                                                        <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border shadow-sm ${propSource === 'none' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
+                                                            <Icon name={propSource === 'none' ? "Settings" : "CheckSquare"} size={10} />
+                                                            Property: {propSource === 'none' ? 'Manual Input' : `Loaded from Public Record (${propSource.toUpperCase()})` }
+                                                        </div>
+                                                        </div>                                                )}
                                                 {isLoadingData && (                                                <div className="w-full md:max-w-md mt-2">
                                                     <div className="w-full bg-slate-100 dark:bg-slate-700 rounded-full h-2 overflow-hidden">
                                                         <div className="bg-blue-600 h-full transition-all duration-300 ease-out" style={{ width: `${loadProgress}%` }}></div>
