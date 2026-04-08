@@ -62,50 +62,34 @@
 
         const fetchEiaPrices = async (state) => {
             if (!EIA_API_KEY || EIA_API_KEY.includes('PLACEHOLDER')) return null;
-            
             const results = { electricity: null, gas: null, oil: null, propane: null };
-
             try {
-                // 1. Electricity Price (cents/kWh -> $/kWh)
                 const elecUrl = `https://api.eia.gov/v2/electricity/retail-sales/data/?api_key=${EIA_API_KEY}&frequency=monthly&data[0]=price&facets[sectorid][]=RES&facets[stateid][]=${state}&sort[0][column]=period&sort[0][direction]=desc&length=1`;
                 const elecRes = await fetch(elecUrl);
-                if (!elecRes.ok) throw new Error(`EIA Elec failed: ${elecRes.status}`);
-                const elecData = await elecRes.json();
-                if (elecData.response.data.length > 0) {
-                    results.electricity = parseFloat(elecData.response.data[0].price) / 100;
+                if (elecRes.ok) {
+                    const d = await elecRes.json();
+                    if (d.response.data.length > 0) results.electricity = parseFloat(d.response.data[0].price) / 100;
                 }
-
-                // 2. Natural Gas Price ($/kcf -> $/therm) - 1 kcf approx 10.37 therms
-                // Note: duoarea is the correct facet name for v2 natural-gas
                 const gasUrl = `https://api.eia.gov/v2/natural-gas/pri/sum/data/?api_key=${EIA_API_KEY}&frequency=monthly&data[0]=value&facets[process][]=PRS&facets[duoarea][]=S${state}&sort[0][column]=period&sort[0][direction]=desc&length=1`;
                 const gasRes = await fetch(gasUrl);
-                if (!gasRes.ok) throw new Error(`EIA Gas failed: ${gasRes.status}`);
-                const gasData = await gasRes.json();
-                if (gasData.response.data.length > 0) {
-                    results.gas = parseFloat(gasData.response.data[0].value) / 10.37;
+                if (gasRes.ok) {
+                    const d = await gasRes.json();
+                    if (d.response.data.length > 0) results.gas = parseFloat(d.response.data[0].value) / 10.37;
                 }
-
-                // 3. Heating Oil Price ($/gal)
-                // Note: petroleum/pri/wfr is the correct route for weekly heating oil
                 const oilUrl = `https://api.eia.gov/v2/petroleum/pri/wfr/data/?api_key=${EIA_API_KEY}&frequency=weekly&data[0]=value&facets[product][]=EPD2F&facets[process][]=PRS&facets[duoarea][]=S${state}&sort[0][column]=period&sort[0][direction]=desc&length=1`;
                 const oilRes = await fetch(oilUrl);
-                if (!oilRes.ok) throw new Error(`EIA Oil failed: ${oilRes.status}`);
-                const oilData = await oilRes.json();
-                if (oilData.response.data.length > 0) {
-                    results.oil = parseFloat(oilData.response.data[0].value);
+                if (oilRes.ok) {
+                    const d = await oilRes.json();
+                    if (d.response.data.length > 0) results.oil = parseFloat(d.response.data[0].value);
                 }
-
-                // 4. Propane Price ($/gal)
                 const propaneUrl = `https://api.eia.gov/v2/petroleum/pri/wfr/data/?api_key=${EIA_API_KEY}&frequency=weekly&data[0]=value&facets[product][]=EPLLPA&facets[process][]=PRS&facets[duoarea][]=S${state}&sort[0][column]=period&sort[0][direction]=desc&length=1`;
                 const proRes = await fetch(propaneUrl);
-                if (!proRes.ok) throw new Error(`EIA Propane failed: ${proRes.status}`);
-                const proData = await proRes.json();
-                if (proData.response.data.length > 0) {
-                    results.propane = parseFloat(proData.response.data[0].value);
+                if (proRes.ok) {
+                    const d = await proRes.json();
+                    if (d.response.data.length > 0) results.propane = parseFloat(d.response.data[0].value);
                 }
             } catch (err) {
-                // Sanitize error to prevent key exposure in logs
-                const msg = err.message ? err.message.replace(/api_key=[^&]*/g, 'api_key=REDACTED') : "EIA Fetch Error";
+                const msg = err.message ? err.message.replace(/api_key=[^&]*/g, 'api_key=REDACTED') : "EIA Error";
                 console.error("EIA Price Fetch Error:", msg);
             }
             return results;
@@ -113,28 +97,18 @@
 
         const fetchPropertyData = async (address) => {
             if (!address || address.length < 5) return null;
-            
             const hasAttom = ATTOM_API_KEY && !ATTOM_API_KEY.includes('PLACEHOLDER');
             const hasRentcast = RENTCAST_API_KEY && !RENTCAST_API_KEY.includes('PLACEHOLDER');
-            
-            if (!hasAttom && hasRentcast) {
-                // We'll proceed if at least one is available
-            } else if (!hasAttom && !hasRentcast) {
-                console.warn("Property lookup skipped: No API keys provided.");
-                return { error: 'No API keys' };
-            }
+            if (!hasAttom && !hasRentcast) return { error: 'No API keys' };
 
             const cacheKey = `prop_v1_${address.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
             const cached = localStorage.getItem(cacheKey);
             if (cached) return JSON.parse(cached);
 
-            let result = { sqft: null, yearBuilt: null, source: null };
-
-            // 1. Try ATTOM
-            if (ATTOM_API_KEY && !ATTOM_API_KEY.includes('PLACEHOLDER')) {
+            let result = { sqft: null, yearBuilt: null, fuel: null, source: null };
+            if (hasAttom) {
                 try {
-                    const url = `https://api.gateway.attomdata.com/propertyapi/v1.0.0/property/basicprofile?address=${encodeURIComponent(address)}`;
-                    const res = await fetch(url, {
+                    const res = await fetch(`https://api.gateway.attomdata.com/propertyapi/v1.0.0/property/basicprofile?address=${encodeURIComponent(address)}`, {
                         headers: { 'apikey': ATTOM_API_KEY, 'Accept': 'application/json' }
                     });
                     if (res.ok) {
@@ -155,12 +129,9 @@
                     console.warn("[Property] ATTOM failed:", msg); 
                 }
             }
-
-            // 2. Fallback to RentCast
-            if (!result.sqft && RENTCAST_API_KEY && !RENTCAST_API_KEY.includes('PLACEHOLDER')) {
+            if (!result.sqft && hasRentcast) {
                 try {
-                    const url = `https://api.rentcast.io/v1/properties?address=${encodeURIComponent(address)}`;
-                    const res = await fetch(url, {
+                    const res = await fetch(`https://api.rentcast.io/v1/properties?address=${encodeURIComponent(address)}`, {
                         headers: { 'X-Api-Key': RENTCAST_API_KEY, 'Accept': 'application/json' }
                     });
                     if (res.ok) {
@@ -174,116 +145,42 @@
                             };
                         }
                     }
-                } catch (err) { 
-                    // RentCast uses a header, but we'll sanitize the error anyway
-                    console.warn("[Property] RentCast failed:", err.message); 
-                }
+                } catch (err) { console.warn("[Property] RentCast failed:", err.message); }
             }
-
             if (result.sqft) localStorage.setItem(cacheKey, JSON.stringify(result));
             return result;
         };
 
         const Icon = ({ name, size = 20, className = "" }) => {
             const icons = {
-                Settings: (
-                    <g fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
-                        <circle cx="12" cy="12" r="3"/>
-                    </g>
-                ),
+                Settings: <g fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></g>,
                 Droplet: <path fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z"/>,
                 Flame: <path fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>,
                 Zap: <polygon fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>,
-                ThermometerSnowflake: (
-                    <g fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M2 12h10"/><path d="M9 4v16"/><path d="m3 9 3 3-3 3"/><path d="M12 6 9 9l-3-3"/><path d="m6 18 3-3 3 3"/><path d="M14 14.89V5c0-2.21 1.79-4 4-4s4 1.79 4 4v9.89a6 6 0 1 1-8 0z"/>
-                    </g>
-                ),
-                TrendingUp: (
-                    <g fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><path d="M17 6h6v6"/>
-                    </g>
-                ),
-                MapPin: (
-                    <g fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>
-                    </g>
-                ),
-                ExternalLink: (
-                    <g fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 22 3 22 10"/><line x1="14" y1="10" x2="22" y2="2"/>
-                    </g>
-                ),
-                Home: (
-                    <g fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/><polyline points="9 22 9 12 15 12 15 22"/>
-                    </g>
-                ),
+                ThermometerSnowflake: <g fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12h10"/><path d="M9 4v16"/><path d="m3 9 3 3-3 3"/><path d="M12 6 9 9l-3-3"/><path d="m6 18 3-3 3 3"/><path d="M14 14.89V5c0-2.21 1.79-4 4-4s4 1.79 4 4v9.89a6 6 0 1 1-8 0z"/></g>,
+                TrendingUp: <g fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><path d="M17 6h6v6"/></g>,
+                MapPin: <g fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></g>,
+                ExternalLink: <g fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 22 3 22 10"/><line x1="14" y1="10" x2="22" y2="2"/></g>,
+                Home: <g fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/><polyline points="9 22 9 12 15 12 15 22"/></g>,
                 Shield: <path fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>,
                 Wrench: <path fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>,
-                CheckSquare: (
-                    <g fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
-                    </g>
-                ),
-                ArrowLeft: (
-                    <g fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/>
-                    </g>
-                )
+                CheckSquare: <g fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></g>,
+                ArrowLeft: <g fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></g>
             };
             return <svg width={size} height={size} viewBox="0 0 24 24" className={className}>{icons[name] || null}</svg>;
         };
 
-        const GRAPH_WIDTH = 800;
-        const GRAPH_HEIGHT = 300;
-        const GRAPH_PADDING = { top: 20, right: 30, bottom: 40, left: 60 };
-        const X_MIN = -20;
-        const X_MAX = 65;
-        const KWH_PER_GALLON_OIL = 40.6; 
-        const KWH_PER_THERM_GAS = 29.3;  
-        const KWH_PER_GALLON_PROPANE = 26.8;
-
+        const GRAPH_WIDTH = 800, GRAPH_HEIGHT = 300, GRAPH_PADDING = { top: 20, right: 30, bottom: 40, left: 60 };
+        const X_MIN = -20, X_MAX = 65;
+        const KWH_PER_GALLON_OIL = 40.6, KWH_PER_THERM_GAS = 29.3, KWH_PER_GALLON_PROPANE = 26.8;
         const UA_BASE_BY_SIZE = { small: 0.10, medium: 0.15, large: 0.25 };
         const UA_MULTIPLIER_BY_INSULATION = { poor: 1.4, average: 1.0, excellent: 0.7 };
         const DEFAULT_GAINS_BY_SIZE = { small: 400, medium: 600, large: 1000 };
 
         const COP_PROFILES = {
-            high: {
-                name: "High Efficiency (Premium Cold Climate)",
-                curve: [
-                    { t: -20, cop: 1.30 }, { t: -10, cop: 1.60 }, { t: 0, cop: 2.00 }, { t: 5, cop: 2.30 },
-                    { t: 17, cop: 2.90 }, { t: 35, cop: 3.60 }, { t: 47, cop: 4.30 }, { t: 65, cop: 5.20 }
-                ]
-            },
-            medium: {
-                name: "Medium Efficiency (Standard Cold Climate)",
-                curve: [
-                    { t: -20, cop: 1.00 }, { t: -10, cop: 1.20 }, { t: 0, cop: 1.50 }, { t: 5, cop: 1.75 },
-                    { t: 17, cop: 2.50 }, { t: 35, cop: 3.00 }, { t: 47, cop: 3.50 }, { t: 65, cop: 4.20 }
-                ]
-            },
-            low: {
-                name: "Low Efficiency (Entry-Level)",
-                curve: [
-                    { t: -20, cop: 1.00 }, { t: -10, cop: 1.00 }, { t: 0, cop: 1.20 }, { t: 5, cop: 1.40 },
-                    { t: 17, cop: 1.90 }, { t: 35, cop: 2.40 }, { t: 47, cop: 2.80 }, { t: 65, cop: 3.40 }
-                ]
-            }
-        };
-
-        const getCOP = (temp, curve) => {
-            if (!curve || curve.length === 0) return 1.0;
-            if (temp <= curve[0].t) return curve[0].cop;
-            if (temp >= curve[curve.length - 1].t) return curve[curve.length - 1].cop;
-            for (let i = 0; i < curve.length - 1; i++) {
-                if (temp >= curve[i].t && temp <= curve[i + 1].t) {
-                    const t1 = curve[i].t, t2 = curve[i + 1].t, cop1 = curve[i].cop, cop2 = curve[i + 1].cop;
-                    return Math.max(1.0, cop1 + (cop2 - cop1) * ((temp - t1) / (t2 - t1)));
-                }
-            }
-            return 1.0;
+            high: { name: "High Efficiency (Premium Cold Climate)", curve: [{ t: -20, cop: 1.3 }, { t: -10, cop: 1.6 }, { t: 0, cop: 2.0 }, { t: 5, cop: 2.3 }, { t: 17, cop: 2.9 }, { t: 35, cop: 3.6 }, { t: 47, cop: 4.3 }, { t: 65, cop: 5.2 }] },
+            medium: { name: "Medium Efficiency (Standard Cold Climate)", curve: [{ t: -20, cop: 1.0 }, { t: -10, cop: 1.2 }, { t: 0, cop: 1.5 }, { t: 5, cop: 1.75 }, { t: 17, cop: 2.5 }, { t: 35, cop: 3.0 }, { t: 47, cop: 3.5 }, { t: 65, cop: 4.2 }] },
+            low: { name: "Low Efficiency (Entry-Level)", curve: [{ t: -20, cop: 1.0 }, { t: -10, cop: 1.0 }, { t: 0, cop: 1.2 }, { t: 5, cop: 1.4 }, { t: 17, cop: 1.9 }, { t: 35, cop: 2.4 }, { t: 47, cop: 2.8 }, { t: 65, cop: 3.4 }] }
         };
 
         const HOME_SIZE_OPTIONS = [
@@ -308,14 +205,27 @@
             { value: 'hp-low', label: 'Heat Pump (Low Efficiency)' }
         ];
 
+        const getCOP = (temp, curve) => {
+            if (!curve || curve.length === 0) return 1.0;
+            if (temp <= curve[0].t) return curve[0].cop;
+            if (temp >= curve[curve.length - 1].t) return curve[curve.length - 1].cop;
+            for (let i = 0; i < curve.length - 1; i++) {
+                if (temp >= curve[i].t && temp <= curve[i + 1].t) {
+                    const t1 = curve[i].t, t2 = curve[i + 1].t, cop1 = curve[i].cop, cop2 = curve[i + 1].cop;
+                    return Math.max(1.0, cop1 + (cop2 - cop1) * ((temp - t1) / (t2 - t1)));
+                }
+            }
+            return 1.0;
+        };
+
         const SliderControl = ({ iconName, label, value, min, max, step, onChange, unit, colorClass, description }) => (
-            <div className="w-full">
+            <div className="w-full text-sm">
                 <div className="flex justify-between items-center mb-2">
                     <div className="flex items-center gap-2 text-slate-700 dark:text-slate-200 font-medium">
                         {iconName && <Icon name={iconName} className={colorClass} />}
                         <span>{label}</span>
                     </div>
-                    <span className="font-semibold text-slate-900 dark:text-white bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded-md text-sm whitespace-nowrap">
+                    <span className="font-semibold text-slate-900 dark:text-white bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded-md">
                         {unit.includes('$') ? `$${parseFloat(value).toFixed(step >= 0.1 ? 2 : 3)}${unit.replace('$', '')}` : `${value}${unit}`}
                     </span>
                 </div>
@@ -335,9 +245,9 @@
 
         const ResultCard = ({ title, cost, color, iconName, subtitle, extraInfo }) => (
             <div className={`p-4 rounded-xl border-l-4 shadow-sm bg-white dark:bg-slate-800 ${color}`}>
-                <div className="flex justify-between items-start">
+                <div className="flex justify-between items-start text-sm">
                     <div>
-                        <p className="text-sm text-slate-500 dark:text-slate-400 font-medium flex items-center gap-1"><Icon name={iconName} size={14} /> {title}</p>
+                        <p className="text-slate-500 dark:text-slate-400 font-medium flex items-center gap-1"><Icon name={iconName} size={14} /> {title}</p>
                         <h3 className="text-2xl font-bold text-slate-900 dark:text-white mt-1">${cost.toFixed(3)}</h3>
                         <p className="text-xs text-slate-400 mt-1">per delivered kWh</p>
                     </div>
@@ -352,10 +262,7 @@
         );
 
         function App() {
-            // --- View State ---
             const [currentView, setCurrentView] = useState(1);
-
-            // --- States ---
             const [zipCode, setZipCode] = useState('');
             const [address, setAddress] = useState('');
             const [activeZipCode, setActiveZipCode] = useState('');
@@ -366,14 +273,13 @@
             const [zipCacheCount, setZipCacheCount] = useState(0);
             const [addrCacheCount, setAddrCacheCount] = useState(0);
             const [fetchedBinData, setFetchedBinData] = useState(null);
-            const [priceSource, setPriceSource] = useState('regional'); // 'regional' or 'eia'
-            const [propSource, setPropSource] = useState('none'); // 'none', 'cached', 'attom', 'rentcast'
+            const [priceSource, setPriceSource] = useState('regional');
+            const [propSource, setPropSource] = useState('none');
             const [homeSize, setHomeSize] = useState('medium');
             const [homeInsulation, setHomeInsulation] = useState('average');
             const [primaryHeating, setPrimaryHeating] = useState('gas');
             const [heatingSetpoint, setHeatingSetpoint] = useState(68);
             const [hpProfileId, setHpProfileId] = useState('medium');
-            
             const [furnaceTuneUp, setFurnaceTuneUp] = useState(false);
             const [upgradedEfficiency, setUpgradedEfficiency] = useState(89.25);
             const [changeSetpoint, setChangeSetpoint] = useState(false);
@@ -385,113 +291,30 @@
             const [upgradeHpProfileId, setUpgradeHpProfileId] = useState('high');
             const [upgradeWeatherization, setUpgradeWeatherization] = useState(false);
             const [upgradeInsulationType, setUpgradeInsulationType] = useState('excellent');
-
             const [internalGains, setInternalGains] = useState(600); 
             const [efficiency, setEfficiency] = useState(85);
             const [elecPrice, setElecPrice] = useState(0.16);
             const [applyHpDiscount, setApplyHpDiscount] = useState(false);
             const [hpDiscount, setHpDiscount] = useState(0.073);
-            const [oilPrice, setOilPrice] = useState(3.80);
-            const [gasPrice, setGasPrice] = useState(1.40);
-            const [propanePrice, setPropanePrice] = useState(3.50);
+            const [oilPrice, setOilPrice] = useState(3.80), [gasPrice, setGasPrice] = useState(1.40), [propanePrice, setPropanePrice] = useState(3.50);
             const [outTemp, setOutTemp] = useState(30);
-            const [cacheSize, setCacheSize] = useState(0);
-            
-            const svgRef = useRef(null);
-            const [isDragging, setIsDragging] = useState(false);
+            const svgRef = useRef(null), [isDragging, setIsDragging] = useState(false);
 
             const cleanZip = useMemo(() => zipCode.trim().replace(/\D/g, ''), [zipCode]);
             const hasPropKey = (ATTOM_API_KEY && !ATTOM_API_KEY.includes('PLACEHOLDER')) || (RENTCAST_API_KEY && !RENTCAST_API_KEY.includes('PLACEHOLDER'));
-
-            const isFossilFuel = primaryHeating === 'gas' || primaryHeating === 'oil' || primaryHeating === 'propane';
             const isFossilFuel_Inner = primaryHeating === 'gas' || primaryHeating === 'oil' || primaryHeating === 'propane';
 
-            // --- Effects ---
             const updateCacheCounts = useCallback(() => {
                 const keys = Object.keys(localStorage);
                 setZipCacheCount(keys.filter(k => k.startsWith('tmy_v4_')).length);
                 setAddrCacheCount(keys.filter(k => k.startsWith('prop_v1_')).length);
             }, []);
 
-            useEffect(() => {
-                updateCacheCounts();
-            }, [updateCacheCounts]);
-
+            useEffect(() => { updateCacheCounts(); }, [updateCacheCounts]);
             useEffect(() => { setInternalGains(DEFAULT_GAINS_BY_SIZE[homeSize]); }, [homeSize]);
             useEffect(() => { if (!changeSetpoint) setUpgradedSetpoint(heatingSetpoint - 2); }, [heatingSetpoint]);
             useEffect(() => { setUpgradedEfficiency(Math.min(96, efficiency * 1.05)); }, [efficiency]);
 
-            // --- Helpers ---
-            const parseNrelCSV = (csvText) => {
-                if (!csvText) {
-                    console.error("CSV text is empty");
-                    return { error: "Received empty data from NREL" };
-                }
-                const lines = csvText.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
-                if (lines.length < 2) {
-                    console.error("CSV has too few lines");
-                    return { error: "NREL data format is invalid (too few lines)" };
-                }
-                
-                // Find the header line (starts with Year,Month or contains temperature)
-                let headerIdx = -1;
-                for (let i = 0; i < Math.min(10, lines.length); i++) {
-                    const l = lines[i].toLowerCase();
-                    if (l.includes('year') && l.includes('month') && l.includes('temperature')) {
-                        headerIdx = i;
-                        break;
-                    }
-                }
-                
-                if (headerIdx === -1) {
-                    // Fallback: assume line 2 (3rd line) is headers if it looks like data headers
-                    if (lines.length > 2 && lines[2].toLowerCase().includes('temperature')) {
-                        headerIdx = 2;
-                    } else {
-                        console.error("Could not find header row in NREL data");
-                        return { error: "Could not find Temperature column in NREL data" };
-                    }
-                }
-
-                const headers = lines[headerIdx].split(',');
-                const tempIdx = headers.findIndex(h => h.trim().toLowerCase() === 'temperature');
-                if (tempIdx === -1) {
-                    console.error("Could not find Temperature column index");
-                    return { error: "Temperature column missing from NREL data" };
-                }
-
-                const dataLines = lines.slice(headerIdx + 1);
-                const bins = {};
-                for (let i = -50; i <= 125; i++) bins[i] = 0;
-
-                let validPoints = 0;
-                dataLines.forEach(line => {
-                    const parts = line.split(',');
-                    if (parts.length > tempIdx) {
-                        const tempC = parseFloat(parts[tempIdx]);
-                        if (!isNaN(tempC)) {
-                            const tempF = Math.round(tempC * 9/5 + 32);
-                            if (tempF >= -50 && tempF <= 125) {
-                                bins[tempF]++;
-                                validPoints++;
-                            }
-                        }
-                    }
-                });
-                
-                if (validPoints === 0) {
-                    console.error("No valid temperature data points found in", dataLines.length, "data lines");
-                    return { error: "No valid temperature data found in NREL file" };
-                }
-
-                const result = [];
-                for (let i = -20; i <= 75; i++) {
-                    result.push({ temp: i, hours: bins[i] || 0 });
-                }
-                return { data: result };
-            };
-
-            // --- Calculations ---
             const currentUA = useMemo(() => UA_BASE_BY_SIZE[homeSize] * UA_MULTIPLIER_BY_INSULATION[homeInsulation], [homeSize, homeInsulation]);
             const upgradedUA = useMemo(() => {
                 const insul = upgradeWeatherization ? upgradeInsulationType : homeInsulation;
@@ -513,20 +336,13 @@
             }, [internalGains]);
 
             const balancePoint = useMemo(() => heatingSetpoint - ((internalGains / 1000) / currentUA), [heatingSetpoint, internalGains, currentUA]);
-
             const isUsingFallback = !fetchedBinData;
 
             const binData = useMemo(() => {
-                if (fetchedBinData) {
-                    return fetchedBinData.map(d => ({
-                        temp: d.temp,
-                        hours: d.temp >= balancePoint ? 0 : d.hours
-                    }));
-                }
+                if (fetchedBinData) return fetchedBinData.map(d => ({ temp: d.temp, hours: d.temp >= balancePoint ? 0 : d.hours }));
                 const data = [];
                 const isMA_inner = activeZipCode.startsWith('01') || activeZipCode.startsWith('02');
                 for (let t = -20; t <= 75; t++) {
-                    // Optimized Gaussian peaks: 140 for MA (~5600 HDD), 110 for Nat'l (~4000 HDD)
                     const hours = t >= balancePoint ? 0 : (isMA_inner ? 140 * Math.exp(-Math.pow(t - 38, 2) / 400) : 110 * Math.exp(-Math.pow(t - 45, 2) / 300));
                     data.push({ temp: t, hours: Math.round(hours) });
                 }
@@ -534,43 +350,40 @@
             }, [activeZipCode, balancePoint, fetchedBinData]);
 
             const annualCosts = useMemo(() => {
-                let hpTotal = 0, oilTotal = 0, gasTotal = 0, propaneTotal = 0, electricTotal = 0;
+                let hp = 0, oil = 0, gas = 0, propane = 0, electric = 0;
                 binData.forEach(d => {
                     if (d.hours <= 0) return;
-                    const load = getLoadAtTemp(d.temp, currentUA, heatingSetpoint);
-                    const kwh = load * d.hours;
-                    hpTotal += kwh * (effectiveElecPrice / getCOP(d.temp, activeCurve));
-                    oilTotal += kwh * oilCostAtEfficiency(efficiency);
-                    gasTotal += kwh * gasCostAtEfficiency(efficiency);
-                    propaneTotal += kwh * propaneCostAtEfficiency(efficiency);
-                    electricTotal += kwh * effectiveElecPrice;
+                    const kwh = getLoadAtTemp(d.temp, currentUA, heatingSetpoint) * d.hours;
+                    hp += kwh * (effectiveElecPrice / getCOP(d.temp, activeCurve));
+                    oil += kwh * oilCostAtEfficiency(efficiency);
+                    gas += kwh * gasCostAtEfficiency(efficiency);
+                    propane += kwh * propaneCostAtEfficiency(efficiency);
+                    electric += kwh * effectiveElecPrice;
                 });
-                return { hp: hpTotal, oil: oilTotal, gas: gasTotal, propane: propaneTotal, electric: electricTotal };
+                return { hp, oil, gas, propane, electric };
             }, [binData, getLoadAtTemp, currentUA, heatingSetpoint, effectiveElecPrice, efficiency, activeCurve, oilCostAtEfficiency, gasCostAtEfficiency, propaneCostAtEfficiency]);
 
             const upgradedAnnualCosts = useMemo(() => {
-                let hpTotal = 0, oilTotal = 0, gasTotal = 0, propaneTotal = 0, electricTotal = 0;
+                let hp = 0, oil = 0, gas = 0, propane = 0, electric = 0;
                 const baselineForUpgrades = changeSetpoint ? upgradedSetpoint : heatingSetpoint;
                 const setpointEffective = useSmartThermostat ? baselineForUpgrades - (2 * awayHours / 24) : baselineForUpgrades;
                 const effEffective = furnaceTuneUp ? upgradedEfficiency : efficiency;
                 const curveUpgrade = COP_PROFILES[addHP ? upgradeHpProfileId : hpProfileId].curve;
-
                 binData.forEach(d => {
                     if (d.hours <= 0) return;
                     const load = getLoadAtTemp(d.temp, upgradedUA, setpointEffective);
                     if (load <= 0) return;
                     const kwh = load * d.hours;
-                    hpTotal += kwh * (effectiveElecPrice / getCOP(d.temp, curveUpgrade));
-                    oilTotal += kwh * oilCostAtEfficiency(effEffective);
-                    gasTotal += kwh * gasCostAtEfficiency(effEffective);
-                    propaneTotal += kwh * propaneCostAtEfficiency(effEffective);
-                    electricTotal += kwh * effectiveElecPrice;
+                    hp += kwh * (effectiveElecPrice / getCOP(d.temp, curveUpgrade));
+                    oil += kwh * oilCostAtEfficiency(effEffective);
+                    gas += kwh * gasCostAtEfficiency(effEffective);
+                    propane += kwh * propaneCostAtEfficiency(effEffective);
+                    electric += kwh * effectiveElecPrice;
                 });
-                return { hp: hpTotal, oil: oilTotal, gas: gasTotal, propane: propaneTotal, electric: electricTotal };
+                return { hp, oil, gas, propane, electric };
             }, [binData, getLoadAtTemp, upgradedUA, heatingSetpoint, changeSetpoint, upgradedSetpoint, awayHours, useSmartThermostat, furnaceTuneUp, upgradedEfficiency, efficiency, addHP, upgradeHpProfileId, hpProfileId, effectiveElecPrice, oilCostAtEfficiency, gasCostAtEfficiency, propaneCostAtEfficiency]);
 
             const maxAnnualCost = Math.max(annualCosts.hp, annualCosts.oil, annualCosts.gas, annualCosts.propane, annualCosts.electric);
-
             const costBars = useMemo(() => {
                 const hpModelName = COP_PROFILES[hpProfileId].name;
                 const bars = [
@@ -597,8 +410,7 @@
             }, [upgradedAnnualCosts, addHP, upgradeHpProfileId, hpProfileId, primaryHeating]);
 
             const upgradeFinancials = useMemo(() => {
-                let upfront = 0, recurring = 0;
-                const items = [];
+                let upfront = 0, recurring = 0, items = [];
                 if (furnaceTuneUp) { recurring += 150; items.push({ name: "Annual Furnace Tune-up", cost: 150, period: "year" }); }
                 if (useSmartThermostat) { upfront += 250; items.push({ name: "Smart Thermostat", cost: 250, period: "upfront" }); }
                 if (useWeatherAware) { upfront += 100; items.push({ name: "Weather-Aware Expansion", cost: 100, period: "upfront" }); }
@@ -608,8 +420,7 @@
                     upfront += base * mult; items.push({ name: "Heat Pump HVAC", cost: base * mult, period: "upfront" });
                 }
                 if (upgradeWeatherization) {
-                    const levels = { poor: 0, average: 1, excellent: 2 };
-                    const diff = levels[upgradeInsulationType] - levels[homeInsulation];
+                    const levels = { poor: 0, average: 1, excellent: 2 }, diff = levels[upgradeInsulationType] - levels[homeInsulation];
                     if (diff > 0) {
                         const cost = diff * 3500 * ({ small: 0.7, medium: 1, large: 1.5 }[homeSize]);
                         upfront += cost; items.push({ name: "Building Weatherization", cost: cost, period: "upfront" });
@@ -620,363 +431,138 @@
 
             const graphData_Across = useMemo(() => {
                 const data = [];
-                for (let t = -20; t <= 65; t += 5) {
-                    data.push({ temp: t, hp: effectiveElecPrice / getCOP(t, activeCurve), oil: oilCostAtEfficiency(efficiency), gas: gasCostAtEfficiency(efficiency) });
-                }
+                for (let t = -20; t <= 65; t += 5) data.push({ temp: t, hp: effectiveElecPrice / getCOP(t, activeCurve), oil: oilCostAtEfficiency(efficiency), gas: gasCostAtEfficiency(efficiency), propane: propaneCostAtEfficiency(efficiency) });
                 return data;
-            }, [effectiveElecPrice, efficiency, activeCurve, oilCostAtEfficiency, gasCostAtEfficiency]);
+            }, [effectiveElecPrice, efficiency, activeCurve, oilCostAtEfficiency, gasCostAtEfficiency, propaneCostAtEfficiency]);
 
             const hpVsGasBalance = useMemo(() => {
-                // Check from coldest to warmest to find where HP becomes cheaper than Gas
-                // If Gas is cheaper even at 75F, balance is > Setpoint
-                const temps = [];
-                for (let t = -20; t <= 75; t++) temps.push(t);
-
-                const firstHPCheaper = temps.find(t => (effectiveElecPrice / getCOP(t, activeCurve)) <= gasCostAtEfficiency(efficiency));
-                if (firstHPCheaper === undefined) return `> ${heatingSetpoint}`; // HP is never cheaper
-                if (firstHPCheaper <= -20) return "< -20"; // HP is always cheaper
-                return firstHPCheaper;
+                const temps = []; for (let t = -20; t <= 75; t++) temps.push(t);
+                const first = temps.find(t => (effectiveElecPrice / getCOP(t, activeCurve)) <= gasCostAtEfficiency(efficiency));
+                return first === undefined ? `> ${heatingSetpoint}` : (first <= -20 ? "< -20" : first);
             }, [effectiveElecPrice, efficiency, activeCurve, gasCostAtEfficiency, heatingSetpoint]);
 
             const hpVsOilBalance = useMemo(() => {
-                const temps = [];
-                for (let t = -20; t <= 75; t++) temps.push(t);
-
-                const firstHPCheaper = temps.find(t => (effectiveElecPrice / getCOP(t, activeCurve)) <= oilCostAtEfficiency(efficiency));
-                if (firstHPCheaper === undefined) return `> ${heatingSetpoint}`;
-                if (firstHPCheaper <= -20) return "< -20";
-                return firstHPCheaper;
+                const temps = []; for (let t = -20; t <= 75; t++) temps.push(t);
+                const first = temps.find(t => (effectiveElecPrice / getCOP(t, activeCurve)) <= oilCostAtEfficiency(efficiency));
+                return first === undefined ? `> ${heatingSetpoint}` : (first <= -20 ? "< -20" : first);
             }, [effectiveElecPrice, efficiency, activeCurve, oilCostAtEfficiency, heatingSetpoint]);
 
             const hpVsPropaneBalance = useMemo(() => {
-                const temps = [];
-                for (let t = -20; t <= 75; t++) temps.push(t);
-
-                const firstHPCheaper = temps.find(t => (effectiveElecPrice / getCOP(t, activeCurve)) <= propaneCostAtEfficiency(efficiency));
-                if (firstHPCheaper === undefined) return `> ${heatingSetpoint}`;
-                if (firstHPCheaper <= -20) return "< -20";
-                return firstHPCheaper;
+                const temps = []; for (let t = -20; t <= 75; t++) temps.push(t);
+                const first = temps.find(t => (effectiveElecPrice / getCOP(t, activeCurve)) <= propaneCostAtEfficiency(efficiency));
+                return first === undefined ? `> ${heatingSetpoint}` : (first <= -20 ? "< -20" : first);
             }, [effectiveElecPrice, efficiency, activeCurve, propaneCostAtEfficiency, heatingSetpoint]);
 
             const hpCheaperPercentage = useMemo(() => {
-                let totalHeatingHours = 0;
-                let hpCheaperHours = 0;
+                let total = 0, cheaper = 0;
                 binData.forEach(d => {
-                    if (d.hours > 0) {
-                        totalHeatingHours += d.hours;
-                        const hpCost = effectiveElecPrice / getCOP(d.temp, activeCurve);
-                        const oilCost = oilCostAtEfficiency(efficiency);
-                        const gasCost = gasCostAtEfficiency(efficiency);
-                        const propaneCost = propaneCostAtEfficiency(efficiency);
-                        if (hpCost < oilCost && hpCost < gasCost && hpCost < propaneCost) {
-                            hpCheaperHours += d.hours;
-                        }
-                    }
+                    if (d.hours <= 0) return; total += d.hours;
+                    const hp = effectiveElecPrice / getCOP(d.temp, activeCurve), oil = oilCostAtEfficiency(efficiency), gas = gasCostAtEfficiency(efficiency), pro = propaneCostAtEfficiency(efficiency);
+                    if (hp < oil && hp < gas && hp < pro) cheaper += d.hours;
                 });
-                return totalHeatingHours > 0 ? Math.round((hpCheaperHours / totalHeatingHours) * 100) : 0;
+                return total > 0 ? Math.round((cheaper / total) * 100) : 0;
             }, [binData, activeCurve, effectiveElecPrice, efficiency, oilCostAtEfficiency, gasCostAtEfficiency, propaneCostAtEfficiency]);
 
-            // --- Handlers ---
             const clearCache = () => {
-                Object.keys(localStorage).forEach(k => {
-                    if (k.startsWith('tmy_v4_') || k.startsWith('prop_v1_')) localStorage.removeItem(k);
-                });
-                updateCacheCounts();
-                alert("Cache cleared");
+                Object.keys(localStorage).forEach(k => { if (k.startsWith('tmy_v4_') || k.startsWith('prop_v1_')) localStorage.removeItem(k); });
+                updateCacheCounts(); alert("Cache cleared");
             };
 
             const handleZipLookup = async (e, useProxy = true, forceRefresh = false) => {
-                // Validate
-                if (cleanZip.length !== 5) {
-                    setLookupMessage("Error: Please enter a valid 5-digit ZIP code.");
-                    return;
-                }
-                
+                if (cleanZip.length !== 5) { setLookupMessage("Error: Please enter a valid 5-digit ZIP code."); return; }
+                let zipDataReady = (activeZipCode === cleanZip && !forceRefresh), currentLat = null, currentLon = null;
                 const applyRates = (state, prices = null, source = 'regional') => {
                     const prefix = cleanZip.substring(0, 2);
-                    // 1. Initial Regional Defaults
-                    if (state === 'MA' || prefix === '01' || prefix === '02') {
-                        setElecPrice(0.33); setOilPrice(4.10); setGasPrice(1.80); setPropanePrice(3.50);
-                        setApplyHpDiscount(true); setHpDiscount(0.073);
-                    } else if (['NH', 'ME', 'VT', 'CT', 'RI'].includes(state)) {
-                        setElecPrice(0.28); setOilPrice(4.00); setGasPrice(1.70); setPropanePrice(3.40);
-                        setApplyHpDiscount(false);
-                    } else {
-                        setElecPrice(0.16); setOilPrice(3.80); setGasPrice(1.40); setPropanePrice(3.20);
-                        setApplyHpDiscount(false);
-                    }
-
-                    // 2. Override with specific prices if provided
-                    if (prices) {
-                        if (prices.electricity) setElecPrice(Number(prices.electricity.toFixed(3)));
-                        if (prices.gas) setGasPrice(Number(prices.gas.toFixed(2)));
-                        if (prices.oil) setOilPrice(Number(prices.oil.toFixed(2)));
-                        if (prices.propane) setPropanePrice(Number(prices.propane.toFixed(2)));
-                    }
+                    if (state === 'MA' || prefix === '01' || prefix === '02') { setElecPrice(0.33); setOilPrice(4.10); setGasPrice(1.80); setPropanePrice(3.50); setApplyHpDiscount(true); setHpDiscount(0.073); }
+                    else if (['NH', 'ME', 'VT', 'CT', 'RI'].includes(state)) { setElecPrice(0.28); setOilPrice(4.00); setGasPrice(1.70); setPropanePrice(3.40); setApplyHpDiscount(false); }
+                    else { setElecPrice(0.16); setOilPrice(3.80); setGasPrice(1.40); setPropanePrice(3.20); setApplyHpDiscount(false); }
+                    if (prices) { if (prices.electricity) setElecPrice(Number(prices.electricity.toFixed(3))); if (prices.gas) setGasPrice(Number(prices.gas.toFixed(2))); if (prices.oil) setOilPrice(Number(prices.oil.toFixed(2))); if (prices.propane) setPropanePrice(Number(prices.propane.toFixed(2))); }
                     setPriceSource(source);
                 };
-
-                // 0. Check Caches
-                const zipCacheKey = `tmy_v4_${cleanZip}`;
-                const addrCacheKey = address ? `prop_v1_${address.toLowerCase().replace(/[^a-z0-9]/g, '')}` : null;
-                
+                const zipCacheKey = `tmy_v4_${cleanZip}`, addrCacheKey = (address && address.length > 5) ? `prop_v1_${address.toLowerCase().replace(/[^a-z0-9]/g, '')}` : null;
                 if (!forceRefresh) {
                     const cachedZip = localStorage.getItem(zipCacheKey);
                     if (cachedZip) {
                         try {
-                            const parsedZip = JSON.parse(cachedZip);
-                            const binned = Array.isArray(parsedZip) ? parsedZip : parsedZip.binnedData;
-                            const eiaPrices = parsedZip.eiaPrices || null;
-                            const source = parsedZip.priceSource || 'regional';
-                            
-                            setFetchedBinData(binned);
-                            setActiveZipCode(cleanZip);
-                            setZipCode(cleanZip);
-                            
-                            const prefix = cleanZip.substring(0, 2);
-                            const stateCode = ZIP_TO_STATE[prefix];
-                            applyRates(stateCode, eiaPrices, source);
-
-                            setLookupMessage(`Loaded ZIP data for ${cleanZip}.`);
-
-                            // Now check for address-specific cache
+                            const pZ = JSON.parse(cachedZip); const binned = Array.isArray(pZ) ? pZ : pZ.binnedData;
+                            const eP = pZ.eiaPrices || null, src = pZ.priceSource || 'regional';
+                            currentLat = pZ.lat; currentLon = pZ.lon; setFetchedBinData(binned); setActiveZipCode(cleanZip); setZipCode(cleanZip);
+                            applyRates(ZIP_TO_STATE[cleanZip.substring(0, 2)], eP, src); zipDataReady = true; setLookupMessage(`Loaded ZIP data for ${cleanZip}.`);
+                            let addrFound = false;
                             if (addrCacheKey) {
                                 const cachedAddr = localStorage.getItem(addrCacheKey);
                                 if (cachedAddr) {
-                                    const parsedAddr = JSON.parse(cachedAddr);
-                                    if (parsedAddr.address) {
-                                        setAddress(parsedAddr.address);
-                                        setActiveAddress(parsedAddr.address);
-                                    }
-                                    if (parsedAddr.sqft) {
-                                        if (parsedAddr.sqft < 1500) setHomeSize('small');
-                                        else if (parsedAddr.sqft < 3000) setHomeSize('medium');
-                                        else setHomeSize('large');
-                                    }
-                                    if (parsedAddr.yearBuilt) {
-                                        if (parsedAddr.yearBuilt < 1970) setHomeInsulation('poor');
-                                        else if (parsedAddr.yearBuilt < 2000) setHomeInsulation('average');
-                                        else setHomeInsulation('excellent');
-                                    }
-                                    if (parsedAddr.fuel) {
-                                        const fuel = parsedAddr.fuel.toUpperCase();
-                                        if (fuel.includes('GAS')) setPrimaryHeating('gas');
-                                        else if (fuel.includes('OIL')) setPrimaryHeating('oil');
-                                        else if (fuel.includes('PROPANE') || fuel.includes('BOTTLE')) setPrimaryHeating('propane');
-                                        else if (fuel.includes('ELEC')) setPrimaryHeating('electric');
-                                    }
-                                    setPropSource('cached');
-                                    setLookupMessage(`Loaded all data for ${parsedAddr.address} from cache.`);
+                                    const pA = JSON.parse(cachedAddr); if (pA.address) { setAddress(pA.address); setActiveAddress(pA.address); }
+                                    if (pA.sqft) { if (pA.sqft < 1500) setHomeSize('small'); else if (pA.sqft < 3000) setHomeSize('medium'); else setHomeSize('large'); }
+                                    if (pA.yearBuilt) { if (pA.yearBuilt < 1970) setHomeInsulation('poor'); else if (pA.yearBuilt < 2000) setHomeInsulation('average'); else setHomeInsulation('excellent'); }
+                                    if (pA.fuel) { const fuel = pA.fuel.toUpperCase(); if (fuel.includes('GAS')) setPrimaryHeating('gas'); else if (fuel.includes('OIL')) setPrimaryHeating('oil'); else if (fuel.includes('PROPANE') || fuel.includes('BOTTLE')) setPrimaryHeating('propane'); else if (fuel.includes('ELEC')) setPrimaryHeating('electric'); }
+                                    setPropSource('cached'); setLookupMessage(`Loaded all data for ${pA.address} from cache.`); addrFound = true;
                                 }
                             }
-
-                            setCurrentView(2);
-                            return;
-                        } catch (e) {
-                            console.error("Cache parse failed:", e);
-                        }
+                            if (!address || (address && addrFound)) { setCurrentView(2); return; }
+                        } catch (e) { console.error("Cache parse failed:", e); }
                     }
                 }
-
-                setIsLoadingData(true);
-                setLoadProgress(5);
-                setLookupMessage(useProxy ? "Geolocating ZIP code..." : "Geolocating ZIP code (direct)...");
-                setActiveZipCode(cleanZip);
-                setZipCode(cleanZip);
-
-                // Simulated progress timer
-                const progressInterval = setInterval(() => {
-                    setLoadProgress(prev => {
-                        if (prev >= 90) return prev;
-                        return prev + (prev < 40 ? 5 : (prev < 70 ? 2 : 1));
-                    });
-                }, 400);
-
+                setIsLoadingData(true); setLoadProgress(zipDataReady ? 40 : 5); setLookupMessage(zipDataReady ? "Using active ZIP data..." : "Validating coordinates...");
+                setActiveZipCode(cleanZip); setZipCode(cleanZip);
+                const progressInterval = setInterval(() => { setLoadProgress(prev => { if (prev >= 95) return prev; return prev + (prev < 40 ? 5 : (prev < 70 ? 2 : 1)); }); }, 400);
                 try {
-                    // 1. Validate / Standardize Address (if provided)
-                    let standardizedAddress = null;
-                    let validatedLat = null;
-                    let validatedLon = null;
-
+                    let standardizedAddress = null, validatedLat = currentLat, validatedLon = currentLon;
                     if (address && address.length > 5) {
                         setLookupMessage(`Validating address: ${address}...`);
-                        const searchUrl = `https://nominatim.openstreetmap.org/search?street=${encodeURIComponent(address)}&postalcode=${cleanZip}&country=US&format=json&addressdetails=1`;
-                        const searchRes = await fetch(searchUrl, { headers: { 'Accept': 'application/json' } });
+                        const searchRes = await fetch(`https://nominatim.openstreetmap.org/search?street=${encodeURIComponent(address)}&postalcode=${cleanZip}&country=US&format=json&addressdetails=1`, { headers: { 'Accept': 'application/json' } });
                         const searchData = await searchRes.json();
-                        
-                        if (!searchData || searchData.length === 0) {
-                            throw new Error(`Could not validate address "${address}" in ZIP ${cleanZip}.`);
-                        }
-
-                        const matched = searchData[0];
-                        const addr = matched.address;
-                        
-                        // Validation A: ZIP Code Match
-                        // Nominatim sometimes returns nearby ZIPs if the street crosses boundaries
-                        const nomZip = addr.postcode || '';
-                        if (!nomZip.startsWith(cleanZip.substring(0, 3))) {
-                            throw new Error(`Address "${address}" appears to be in ZIP ${nomZip}, which doesn't match ${cleanZip}.`);
-                        }
-
-                        // Validation B: Building Category
-                        // We want houses, apartments, buildings, etc. 
-                        // Nominatim uses 'class' and 'type'
-                        const validTypes = ['house', 'building', 'residential', 'apartments', 'terrace', 'detached', 'semidetached_house'];
-                        if (!validTypes.includes(matched.type) && matched.class !== 'building') {
-                            console.warn("[Validation] Non-residential type detected:", matched.type, matched.class);
-                            // We'll allow it but log a warning, or throw if you want to be strict:
-                            // throw new Error("Provided address does not appear to be a residential building.");
-                        }
-
+                        if (!searchData || searchData.length === 0) throw new Error(`Could not validate address "${address}" in ZIP ${cleanZip}.`);
+                        const matched = searchData[0], addr = matched.address, nomZip = addr.postcode || '';
+                        if (!nomZip.startsWith(cleanZip.substring(0, 3))) throw new Error(`Address "${address}" appears to be in ZIP ${nomZip}, which doesn't match ${cleanZip}.`);
                         standardizedAddress = `${addr.house_number || ''} ${addr.road || ''}, ${addr.city || addr.town || addr.village || ''}, ${addr.state || ''} ${addr.postcode || cleanZip}`.trim().replace(/^,/, '').trim();
-                        validatedLat = matched.lat;
-                        validatedLon = matched.lon;
-                        
-                        setAddress(standardizedAddress);
-                        setActiveAddress(standardizedAddress);
-                        setLoadProgress(15);
+                        validatedLat = matched.lat; validatedLon = matched.lon; setAddress(standardizedAddress); setActiveAddress(standardizedAddress); setLoadProgress(prev => Math.max(prev, 20));
                     }
-
-                    // 2. Geolocate ZIP (if no address validation was done)
-                    if (!validatedLat || !validatedLon) {
-                        setLookupMessage(useProxy ? "Geolocating ZIP code..." : "Geolocating ZIP code (direct)...");
-                        const geoRes = await fetch(`https://nominatim.openstreetmap.org/search?postalcode=${cleanZip}&country=US&format=json`, {
-                            headers: { 'Accept': 'application/json' }
-                        });
-                        const geoData = await geoRes.json();
-                        if (!geoData || geoData.length === 0) throw new Error("ZIP code not found");
-                        validatedLat = geoData[0].lat;
-                        validatedLon = geoData[0].lon;
-                    }
-                    setLoadProgress(30);
-
-                    // 3. Fetch climate data
-                    setLookupMessage("Fetching 2025 climate data...");
-                    const omApiUrl = `https://archive-api.open-meteo.com/v1/archive?latitude=${validatedLat}&longitude=${validatedLon}&start_date=2025-01-01&end_date=2025-12-31&hourly=temperature_2m`;
-                    
-                    let omData = null;
-                    const tryFetch = async (url, type) => {
-                        const res = await fetch(url);
-                        if (!res.ok) throw new Error(`${type} fetch failed: ${res.status}`);
-                        return await res.json();
-                    };
-
-                    try {
-                        omData = await tryFetch(omApiUrl, "Direct");
-                    } catch (e1) {
-                        setLookupMessage("Fetching data (via proxy)...");
-                        const proxyA = `https://api.allorigins.win/get?url=${encodeURIComponent(omApiUrl)}`;
-                        const resp = await tryFetch(proxyA, "Proxy");
-                        omData = JSON.parse(resp.contents);
-                    }
-                    
-                    if (!omData || !omData.hourly || !omData.hourly.temperature_2m) throw new Error("Invalid weather data");
-
-                    setLoadProgress(70);
-
-                    // 4. Process Climate Data into bins
-                    const temperatures = omData.hourly.temperature_2m;
-                    const bins = {};
-                    for (let i = -50; i <= 125; i++) bins[i] = 0;
-                    temperatures.forEach(tempC => {
-                        const tempF = Math.round(tempC * 9/5 + 32);
-                        if (tempF >= -50 && tempF <= 125) bins[tempF]++;
-                    });
-                    const binnedData = [];
-                    for (let i = -20; i <= 75; i++) binnedData.push({ temp: i, hours: bins[i] || 0 });
-                    setFetchedBinData(binnedData);
-
-                    // 5. Fetch EIA Prices
-                    const prefix = cleanZip.substring(0, 2);
-                    const stateCode = ZIP_TO_STATE[prefix];
-                    let eiaPricesResults = null;
-                    let detectedPriceSource = 'regional';
-
-                    if (stateCode) {
-                        setLookupMessage(`Fetching latest ${stateCode} energy prices...`);
-                        try {
-                            eiaPricesResults = await fetchEiaPrices(stateCode);
-                            if (eiaPricesResults && (eiaPricesResults.electricity || eiaPricesResults.gas || eiaPricesResults.oil || eiaPricesResults.propane)) {
-                                detectedPriceSource = 'eia';
-                            }
-                        } catch (eiaErr) {
-                            console.warn("EIA fetch failed", eiaErr);
+                    let finalBinnedData = fetchedBinData, finalEiaPrices = null, finalPriceSource = priceSource;
+                    if (!zipDataReady) {
+                        if (!validatedLat || !validatedLon) {
+                            const geoRes = await fetch(`https://nominatim.openstreetmap.org/search?postalcode=${cleanZip}&country=US&format=json`);
+                            const geoData = await geoRes.json(); if (!geoData || geoData.length === 0) throw new Error("ZIP code not found");
+                            validatedLat = geoData[0].lat; validatedLon = geoData[0].lon;
                         }
+                        setLookupMessage("Fetching 2025 climate data...");
+                        const omRes = await fetch(`https://archive-api.open-meteo.com/v1/archive?latitude=${validatedLat}&longitude=${validatedLon}&start_date=2025-01-01&end_date=2025-12-31&hourly=temperature_2m`);
+                        if (!omRes.ok) throw new Error(`Weather fetch failed: ${omRes.status}`);
+                        const omData = await omRes.json(), temperatures = omData.hourly.temperature_2m, bins = {};
+                        for (let i = -50; i <= 125; i++) bins[i] = 0;
+                        temperatures.forEach(tempC => { const tempF = Math.round(tempC * 9/5 + 32); if (tempF >= -50 && tempF <= 125) bins[tempF]++; });
+                        finalBinnedData = []; for (let i = -20; i <= 75; i++) finalBinnedData.push({ temp: i, hours: bins[i] || 0 });
+                        setFetchedBinData(finalBinnedData);
+                        const stateCode = ZIP_TO_STATE[cleanZip.substring(0, 2)]; finalPriceSource = 'regional';
+                        if (stateCode) {
+                            setLookupMessage(`Fetching latest ${stateCode} energy prices...`);
+                            try { finalEiaPrices = await fetchEiaPrices(stateCode); if (finalEiaPrices && (finalEiaPrices.electricity || finalEiaPrices.gas || finalEiaPrices.oil || finalEiaPrices.propane)) finalPriceSource = 'eia'; } catch (eiaErr) { console.warn("EIA failed", eiaErr); }
+                        }
+                        applyRates(stateCode, finalEiaPrices, finalPriceSource);
                     }
-
-                    applyRates(stateCode, eiaPricesResults, detectedPriceSource);
-
-                    // 6. Fetch Property Details (if address validated)
-                    let finalPropData = null;
-                    setPropSource('none');
-
+                    let finalPropData = null; setPropSource('none');
                     if (standardizedAddress) {
                         setLookupMessage(`Fetching structural details...`);
-                        try {
-                            const propData = await fetchPropertyData(standardizedAddress);
-                            if (propData && propData.sqft) {
-                                finalPropData = {
-                                    address: standardizedAddress,
-                                    sqft: propData.sqft,
-                                    yearBuilt: propData.yearBuilt,
-                                    fuel: propData.fuel
-                                };
-                                setPropSource(propData.source ? propData.source.toLowerCase() : 'cached');
-
-                                // Map SqFt to Home Size
-                                if (propData.sqft < 1500) setHomeSize('small');
-                                else if (propData.sqft < 3000) setHomeSize('medium');
-                                else setHomeSize('large');
-
-                                // Map YearBuilt to Insulation
-                                if (propData.yearBuilt) {
-                                    if (propData.yearBuilt < 1970) setHomeInsulation('poor');
-                                    else if (propData.yearBuilt < 2000) setHomeInsulation('average');
-                                    else setHomeInsulation('excellent');
-                                }
-
-                                // Map Fuel Type to Primary Heating
-                                if (propData.fuel) {
-                                    const fuel = propData.fuel.toUpperCase();
-                                    if (fuel.includes('GAS')) setPrimaryHeating('gas');
-                                    else if (fuel.includes('OIL')) setPrimaryHeating('oil');
-                                    else if (fuel.includes('PROPANE') || fuel.includes('BOTTLE')) setPrimaryHeating('propane');
-                                    else if (fuel.includes('ELEC')) setPrimaryHeating('electric');
-                                }
-                            }
-                        } catch (propErr) {
-                            console.warn("Structural fetch failed", propErr);
+                        const propData = await fetchPropertyData(standardizedAddress);
+                        if (propData && propData.sqft) {
+                            finalPropData = { address: standardizedAddress, sqft: propData.sqft, yearBuilt: propData.yearBuilt, fuel: propData.fuel };
+                            setPropSource(propData.source ? propData.source.toLowerCase() : 'cached');
+                            if (propData.sqft < 1500) setHomeSize('small'); else if (propData.sqft < 3000) setHomeSize('medium'); else setHomeSize('large');
+                            if (propData.yearBuilt) { if (propData.yearBuilt < 1970) setHomeInsulation('poor'); else if (propData.yearBuilt < 2000) setHomeInsulation('average'); else setHomeInsulation('excellent'); }
+                            if (propData.fuel) { const fuel = propData.fuel.toUpperCase(); if (fuel.includes('GAS')) setPrimaryHeating('gas'); else if (fuel.includes('OIL')) setPrimaryHeating('oil'); else if (fuel.includes('PROPANE') || fuel.includes('BOTTLE')) setPrimaryHeating('propane'); else if (fuel.includes('ELEC')) setPrimaryHeating('electric'); }
                         }
                     }
-
-                    // 7. Save to Caches
-                    const zipCacheData = {
-                        binnedData: binnedData,
-                        eiaPrices: eiaPricesResults,
-                        priceSource: detectedPriceSource,
-                        timestamp: Date.now()
-                    };
-                    localStorage.setItem(zipCacheKey, JSON.stringify(zipCacheData));
-                    
-                    if (finalPropData) {
-                        localStorage.setItem(addrCacheKey, JSON.stringify(finalPropData));
+                    if (!zipDataReady || forceRefresh) {
+                        localStorage.setItem(zipCacheKey, JSON.stringify({ binnedData: finalBinnedData, eiaPrices: finalEiaPrices, priceSource: finalPriceSource, lat: validatedLat, lon: validatedLon, timestamp: Date.now() }));
                     }
-
-                    updateCacheCounts();
-
-                    setLoadProgress(100);
-                    setLookupMessage(`Data for ${finalPropData ? finalPropData.address : cleanZip} loaded successfully.`);
-                    setCurrentView(2);
+                    if (finalPropData) {
+                        localStorage.setItem(`prop_v1_${finalPropData.address.toLowerCase().replace(/[^a-z0-9]/g, '')}`, JSON.stringify(finalPropData));
+                    }
+                    updateCacheCounts(); setLoadProgress(100); setLookupMessage(`Data for ${finalPropData ? finalPropData.address : cleanZip} loaded successfully.`); setCurrentView(2);
                 } catch (err) {
-                    console.error("Lookup failed:", err);
-                    setLookupMessage(`Error: ${err.message}. Please check your ZIP code and try again.`);
-                    setFetchedBinData(null);
-                    setActiveZipCode(''); // Clear active ZIP so indicators hide
-                    // Do NOT switch to view 2 on failure
-                } finally {
-                    clearInterval(progressInterval);
-                    setIsLoadingData(false);
-                }
+                    console.error("Lookup failed:", err); setLookupMessage(`Error: ${err.message}. Please check your ZIP code and try again.`);
+                    setFetchedBinData(null); setActiveZipCode(''); setActiveAddress('');
+                } finally { clearInterval(progressInterval); setIsLoadingData(false); }
             };
 
             const handleSystemChange = (val) => {
@@ -988,114 +574,48 @@
                 }
             };
 
-            const handleDrag = useCallback((clientX) => {
-                if (!svgRef.current) return;
-                const rect = svgRef.current.getBoundingClientRect();
-                const svgX = ((clientX - rect.left) / rect.width) * GRAPH_WIDTH;
-                const innerWidth = GRAPH_WIDTH - GRAPH_PADDING.left - GRAPH_PADDING.right;
-                let newTemp = Math.round(X_MIN + ((svgX - GRAPH_PADDING.left) / innerWidth) * (X_MAX - X_MIN));
-                setOutTemp(Math.max(X_MIN, Math.min(X_MAX, newTemp)));
-            }, []);
+            const handleDrag = useCallback((clientX) => { if (!svgRef.current) return; const rect = svgRef.current.getBoundingClientRect(), svgX = ((clientX - rect.left) / rect.width) * GRAPH_WIDTH, innerWidth = GRAPH_WIDTH - GRAPH_PADDING.left - GRAPH_PADDING.right; setOutTemp(Math.max(X_MIN, Math.min(X_MAX, Math.round(X_MIN + ((svgX - GRAPH_PADDING.left) / innerWidth) * (X_MAX - X_MIN))))); }, []);
+            const currentSystemVal = primaryHeating === 'hp' ? `hp-${hpProfileId}` : primaryHeating, systemIcon = primaryHeating === 'hp' ? 'ThermometerSnowflake' : (primaryHeating === 'electric' ? 'Zap' : 'Flame'), systemColor = primaryHeating === 'hp' ? 'text-blue-500' : (primaryHeating === 'electric' ? 'text-purple-500' : 'text-red-500');
 
-            const currentSystemVal = primaryHeating === 'hp' ? `hp-${hpProfileId}` : primaryHeating;
-            const systemIcon = primaryHeating === 'hp' ? 'ThermometerSnowflake' : (primaryHeating === 'electric' ? 'Zap' : 'Flame');
-            const systemColor = primaryHeating === 'hp' ? 'text-blue-500' : (primaryHeating === 'electric' ? 'text-purple-500' : 'text-red-500');
-
-            // --- Sub-Renders ---
             const renderLineGraph = () => {
                 const innerWidth = GRAPH_WIDTH - GRAPH_PADDING.left - GRAPH_PADDING.right, innerHeight = GRAPH_HEIGHT - GRAPH_PADDING.top - GRAPH_PADDING.bottom;
                 const yMax = Math.max(effectiveElecPrice / activeCurve[0].cop, oilCostAtEfficiency(efficiency), gasCostAtEfficiency(efficiency), propaneCostAtEfficiency(efficiency)) * 1.1;
-                const mapX = (t) => GRAPH_PADDING.left + ((t - X_MIN) / (X_MAX - X_MIN)) * innerWidth;
-                const mapY = (c) => GRAPH_PADDING.top + innerHeight - (c / yMax) * innerHeight;
+                const mapX = (t) => GRAPH_PADDING.left + ((t - X_MIN) / (X_MAX - X_MIN)) * innerWidth, mapY = (c) => GRAPH_PADDING.top + innerHeight - (c / yMax) * innerHeight;
                 const createPath = (key) => graphData_Across.map((d, i) => (i === 0 ? 'M' : 'L') + ` ${mapX(d.temp)} ${mapY(d[key])}`).join(' ');
                 return (
                     <svg ref={svgRef} viewBox={`0 0 ${GRAPH_WIDTH} ${GRAPH_HEIGHT}`} className="w-full h-full text-xs overflow-visible touch-none font-sans" onPointerMove={(e) => isDragging && handleDrag(e.clientX)} onPointerUp={() => setIsDragging(false)} onPointerLeave={() => setIsDragging(false)}>
-                        {[0, 0.25, 0.5, 0.75, 1].map(r => (
-                            <g key={r}><line x1={GRAPH_PADDING.left} y1={mapY(yMax*r)} x2={GRAPH_WIDTH-GRAPH_PADDING.right} y2={mapY(yMax*r)} className="stroke-slate-200 dark:stroke-slate-700" strokeDasharray="4 4"/><text x={GRAPH_PADDING.left-10} y={mapY(yMax*r)+4} textAnchor="end" className="fill-slate-500 font-medium">${(yMax*r).toFixed(2)}</text></g>
-                        ))}
-                        {[-20, -10, 0, 10, 20, 30, 40, 50, 60].map(t => (
-                            <g key={t}><line x1={mapX(t)} y1={GRAPH_PADDING.top+innerHeight} x2={mapX(t)} y2={GRAPH_PADDING.top+innerHeight+5} className="stroke-slate-300 dark:stroke-slate-600"/><text x={mapX(t)} y={GRAPH_PADDING.top+innerHeight+20} textAnchor="middle" className="fill-slate-500 font-medium">{t}°F</text></g>
-                        ))}
-                        <g className="cursor-ew-resize" onPointerDown={(e) => { e.target.setPointerCapture(e.pointerId); setIsDragging(true); handleDrag(e.clientX); }}>
-                            <line x1={mapX(outTemp)} y1={GRAPH_PADDING.top} x2={mapX(outTemp)} y2={GRAPH_PADDING.top+innerHeight} className="stroke-transparent stroke-[24px]"/><line x1={mapX(outTemp)} y1={GRAPH_PADDING.top} x2={mapX(outTemp)} y2={GRAPH_PADDING.top+innerHeight} className={`stroke-2 ${isDragging ? 'stroke-blue-500' : 'stroke-slate-400 dark:stroke-slate-500'}`} strokeDasharray="6 6"/><rect x={mapX(outTemp)-6} y={GRAPH_PADDING.top+innerHeight/2-12} width={12} height={24} rx={4} className={`${isDragging ? 'fill-blue-500' : 'fill-slate-400'}`}/><text x={mapX(outTemp)} y={GRAPH_PADDING.top-5} textAnchor="middle" className="font-bold fill-slate-600 dark:fill-slate-300 select-none">{outTemp}°F</text>
-                        </g>
+                        {[0, 0.25, 0.5, 0.75, 1].map(r => ( <g key={r}><line x1={GRAPH_PADDING.left} y1={mapY(yMax*r)} x2={GRAPH_WIDTH-GRAPH_PADDING.right} y2={mapY(yMax*r)} className="stroke-slate-200 dark:stroke-slate-700" strokeDasharray="4 4"/><text x={GRAPH_PADDING.left-10} y={mapY(yMax*r)+4} textAnchor="end" className="fill-slate-500 font-medium">${(yMax*r).toFixed(2)}</text></g> ))}
+                        {[-20, -10, 0, 10, 20, 30, 40, 50, 60].map(t => ( <g key={t}><line x1={mapX(t)} y1={GRAPH_PADDING.top+innerHeight} x2={mapX(t)} y2={GRAPH_PADDING.top+innerHeight+5} className="stroke-slate-300 dark:stroke-slate-600"/><text x={mapX(t)} y={GRAPH_PADDING.top+innerHeight+20} textAnchor="middle" className="fill-slate-500 font-medium">{t}°F</text></g> ))}
+                        <g className="cursor-ew-resize" onPointerDown={(e) => { e.target.setPointerCapture(e.pointerId); setIsDragging(true); handleDrag(e.clientX); }}><line x1={mapX(outTemp)} y1={GRAPH_PADDING.top} x2={mapX(outTemp)} y2={GRAPH_PADDING.top+innerHeight} className="stroke-transparent stroke-[24px]"/><line x1={mapX(outTemp)} y1={GRAPH_PADDING.top} x2={mapX(outTemp)} y2={GRAPH_PADDING.top+innerHeight} className={`stroke-2 ${isDragging ? 'stroke-blue-500' : 'stroke-slate-400 dark:stroke-slate-500'}`} strokeDasharray="6 6"/><rect x={mapX(outTemp)-6} y={GRAPH_PADDING.top+innerHeight/2-12} width={12} height={24} rx={4} className={`${isDragging ? 'fill-blue-500' : 'fill-slate-400'}`}/><text x={mapX(outTemp)} y={GRAPH_PADDING.top-5} textAnchor="middle" className="font-bold fill-slate-600 dark:fill-slate-300 select-none">{outTemp}°F</text></g>
                         <path d={createPath('gas')} fill="none" className="stroke-red-500" strokeWidth="3" strokeLinejoin="round"/><path d={createPath('oil')} fill="none" className="stroke-slate-500" strokeWidth="3" strokeLinejoin="round"/><path d={createPath('propane')} fill="none" className="stroke-orange-500" strokeWidth="3" strokeLinejoin="round"/><path d={createPath('hp')} fill="none" className="stroke-blue-500" strokeWidth="4" strokeLinejoin="round"/>
                     </svg>
                 );
             };
 
             const renderBinGraph = () => {
-                const width = 800, height = 280, padding = { top: 55, right: 30, bottom: 50, left: 60 };
-                const innerWidth = width - padding.left - padding.right, innerHeight = height - padding.top - padding.bottom;
-                const visualBinData = binData;
-
-                const yMax = Math.max(100, Math.max(...visualBinData.map(d => d.hours)) * 1.1);
-                const mapX = (t) => padding.left + ((t - (-20)) / (75 - (-20))) * innerWidth;
-                const mapY = (h) => padding.top + innerHeight - (h / yMax) * innerHeight;
+                const width = 800, height = 280, padding = { top: 55, right: 30, bottom: 50, left: 60 }, innerWidth = width - padding.left - padding.right, innerHeight = height - padding.top - padding.bottom;
+                const visualBinData = binData, yMax = Math.max(100, Math.max(...visualBinData.map(d => d.hours)) * 1.1), mapX = (t) => padding.left + ((t - (-20)) / (75 - (-20))) * innerWidth, mapY = (h) => padding.top + innerHeight - (h / yMax) * innerHeight;
                 return (
                     <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full text-xs overflow-visible font-sans">
-                        {[0, 0.5, 1].map(r => (
-                            <g key={r}><line x1={padding.left} y1={mapY(yMax*r)} x2={width-padding.right} y2={mapY(yMax*r)} className="stroke-slate-200 dark:stroke-slate-700" strokeDasharray="4 4"/><text x={padding.left-10} y={mapY(yMax*r)+4} textAnchor="end" className="fill-slate-500">{Math.round(yMax*r)}h</text></g>
-                        ))}
-                        {[-20, 0, 20, 40, 60].map(t => (
-                            <g key={t}>
-                                <line x1={mapX(t)} y1={padding.top + innerHeight} x2={mapX(t)} y2={padding.top + innerHeight + 5} className="stroke-slate-300 dark:stroke-slate-600" />
-                                <text x={mapX(t)} y={padding.top + innerHeight + 20} textAnchor="middle" className="fill-slate-500">{t}°F</text>
-                            </g>
-                        ))}
+                        {[0, 0.5, 1].map(r => ( <g key={r}><line x1={padding.left} y1={mapY(yMax*r)} x2={width-padding.right} y2={mapY(yMax*r)} className="stroke-slate-200 dark:stroke-slate-700" strokeDasharray="4 4"/><text x={padding.left-10} y={mapY(yMax*r)+4} textAnchor="end" className="fill-slate-500">{Math.round(yMax*r)}h</text></g> ))}
+                        {[-20, 0, 20, 40, 60].map(t => ( <g key={t}><line x1={mapX(t)} y1={padding.top + innerHeight} x2={mapX(t)} y2={padding.top + innerHeight + 5} className="stroke-slate-300 dark:stroke-slate-600" /><text x={mapX(t)} y={padding.top + innerHeight + 20} textAnchor="middle" className="fill-slate-500">{t}°F</text></g> ))}
                         {visualBinData.map(d => d.hours > 0 && <rect key={d.temp} x={mapX(d.temp-0.5)} y={mapY(d.hours)} width={Math.max(1, mapX(1)-mapX(0)-1)} height={mapY(0)-mapY(d.hours)} className="fill-blue-200 dark:fill-blue-900/60 hover:fill-blue-400 transition-colors"/>)}
-                        
-                        <line x1={mapX(heatingSetpoint)} y1={padding.top} x2={mapX(heatingSetpoint)} y2={padding.top+innerHeight} className="stroke-slate-300 dark:stroke-slate-600 stroke-1" strokeDasharray="2 2"/>
-                        <text x={mapX(heatingSetpoint)} y={10} textAnchor="middle" className="fill-slate-400 text-[10px]">Setpoint ({heatingSetpoint}°F)</text>
-                        
-                        <line x1={mapX(balancePoint)} y1={padding.top} x2={mapX(balancePoint)} y2={padding.top+innerHeight} className="stroke-orange-500 stroke-2" strokeDasharray="4 4"/>
-                        <text x={mapX(balancePoint)} y={22} textAnchor="middle" className="fill-orange-600 font-bold text-[10px]">HVAC Balance Point ({Math.round(balancePoint)}°F)</text>
-
-                        {/* Original Gas/Oil Balance points from bin graph */}
-                        {typeof hpVsGasBalance === 'number' && hpVsGasBalance > -20 && (
-                            <g>
-                                <line x1={mapX(hpVsGasBalance)} y1={padding.top} x2={mapX(hpVsGasBalance)} y2={padding.top+innerHeight} className="stroke-red-500 stroke-2 opacity-50" strokeDasharray="4 4"/>
-                                <text x={mapX(hpVsGasBalance)} y={34} textAnchor="middle" className="fill-red-600 dark:fill-red-400 font-bold text-[10px]">Gas cheaper &lt; {hpVsGasBalance}°F</text>
-                            </g>
-                        )}
-
-                        {typeof hpVsOilBalance === 'number' && hpVsOilBalance > -20 && (
-                            <g>
-                                <line x1={mapX(hpVsOilBalance)} y1={padding.top} x2={mapX(hpVsOilBalance)} y2={padding.top+innerHeight} className="stroke-slate-500 stroke-2 opacity-50" strokeDasharray="4 4"/>
-                                <text x={mapX(hpVsOilBalance)} y={46} textAnchor="middle" className="fill-slate-600 dark:fill-slate-400 font-bold text-[10px]">Oil cheaper &lt; {hpVsOilBalance}°F</text>
-                            </g>
-                        )}
-
-                        {typeof hpVsPropaneBalance === 'number' && hpVsPropaneBalance > -20 && (
-                            <g>
-                                <line x1={mapX(hpVsPropaneBalance)} y1={padding.top} x2={mapX(hpVsPropaneBalance)} y2={padding.top+innerHeight} className="stroke-orange-500 stroke-2 opacity-50" strokeDasharray="4 4"/>
-                                <text x={mapX(hpVsPropaneBalance)} y={58} textAnchor="middle" className="fill-orange-600 dark:fill-orange-400 font-bold text-[10px]">Propane cheaper &lt; {hpVsPropaneBalance}°F</text>
-                            </g>
-                        )}
+                        <line x1={mapX(heatingSetpoint)} y1={padding.top} x2={mapX(heatingSetpoint)} y2={padding.top+innerHeight} className="stroke-slate-300 dark:stroke-slate-600 stroke-1" strokeDasharray="2 2"/><text x={mapX(heatingSetpoint)} y={10} textAnchor="middle" className="fill-slate-400 text-[10px]">Setpoint ({heatingSetpoint}°F)</text>
+                        <line x1={mapX(balancePoint)} y1={padding.top} x2={mapX(balancePoint)} y2={padding.top+innerHeight} className="stroke-orange-500 stroke-2" strokeDasharray="4 4"/><text x={mapX(balancePoint)} y={22} textAnchor="middle" className="fill-orange-600 font-bold text-[10px]">HVAC Balance Point ({Math.round(balancePoint)}°F)</text>
+                        {typeof hpVsGasBalance === 'number' && hpVsGasBalance > -20 && ( <g><line x1={mapX(hpVsGasBalance)} y1={padding.top} x2={mapX(hpVsGasBalance)} y2={padding.top+innerHeight} className="stroke-red-500 stroke-2 opacity-50" strokeDasharray="4 4"/><text x={mapX(hpVsGasBalance)} y={34} textAnchor="middle" className="fill-red-600 dark:fill-red-400 font-bold text-[10px]">Gas cheaper &lt; {hpVsGasBalance}°F</text></g> )}
+                        {typeof hpVsOilBalance === 'number' && hpVsOilBalance > -20 && ( <g><line x1={mapX(hpVsOilBalance)} y1={padding.top} x2={mapX(hpVsOilBalance)} y2={padding.top+innerHeight} className="stroke-slate-500 stroke-2 opacity-50" strokeDasharray="4 4"/><text x={mapX(hpVsOilBalance)} y={46} textAnchor="middle" className="fill-slate-600 dark:fill-slate-400 font-bold text-[10px]">Oil cheaper &lt; {hpVsOilBalance}°F</text></g> )}
+                        {typeof hpVsPropaneBalance === 'number' && hpVsPropaneBalance > -20 && ( <g><line x1={mapX(hpVsPropaneBalance)} y1={padding.top} x2={mapX(hpVsPropaneBalance)} y2={padding.top+innerHeight} className="stroke-orange-500 stroke-2 opacity-50" strokeDasharray="4 4"/><text x={mapX(hpVsPropaneBalance)} y={58} textAnchor="middle" className="fill-orange-600 dark:fill-orange-400 font-bold text-[10px]">Propane cheaper &lt; {hpVsPropaneBalance}°F</text></g> )}
                     </svg>
                 );
             };
 
             const renderAssumptionGraph = (type) => {
-                const width = 400, height = 180, padding = { top: 15, right: 10, bottom: 40, left: 55 };
-                const innerWidth = width - padding.left - padding.right, innerHeight = height - padding.top - padding.bottom;
-                const mapX = (t) => padding.left + ((t - X_MIN) / (X_MAX - X_MIN)) * innerWidth;
-                const yLimit = type === 'cop' ? 6 : 35;
-                const mapY = (v) => padding.top + innerHeight - (v / yLimit) * innerHeight;
-                const points = [];
-                for(let t = X_MIN; t <= X_MAX; t += 5) {
-                    const v = type === 'cop' ? getCOP(t, activeCurve) : getLoadAtTemp(t, currentUA, heatingSetpoint);
-                    points.push(`${t === X_MIN ? 'M' : 'L'} ${mapX(t)} ${mapY(v)}`);
-                }
-                const ticks = type === 'cop' ? [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 5.5, 6] : [0, 5, 10, 15, 20, 25, 30, 35];
+                const width = 400, height = 180, padding = { top: 15, right: 10, bottom: 40, left: 55 }, innerWidth = width - padding.left - padding.right, innerHeight = height - padding.top - padding.bottom, mapX = (t) => padding.left + ((t - X_MIN) / (X_MAX - X_MIN)) * innerWidth, yLimit = type === 'cop' ? 6 : 35, mapY = (v) => padding.top + innerHeight - (v / yLimit) * innerHeight, points = [];
+                for(let t = X_MIN; t <= X_MAX; t += 5) { const v = type === 'cop' ? getCOP(t, activeCurve) : getLoadAtTemp(t, currentUA, heatingSetpoint); points.push(`${t === X_MIN ? 'M' : 'L'} ${mapX(t)} ${mapY(v)}`); }
+                const ticks = type === 'cop' ? [0, 1, 2, 3, 4, 5, 6] : [0, 10, 20, 30];
                 return (
                     <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full text-[10px] overflow-visible font-sans">
-                        {ticks.map(v => (
-                            <g key={v}>
-                                <line x1={padding.left} y1={mapY(v)} x2={width-padding.right} y2={mapY(v)} className="stroke-slate-200 dark:stroke-slate-700" strokeDasharray="2 2"/>
-                                <text x={padding.left-5} y={mapY(v)+3} textAnchor="end" className="fill-slate-500">{type === 'cop' ? v.toFixed(1) : v + 'kW'}</text>
-                            </g>
-                        ))}
+                        {ticks.map(v => ( <g key={v}><line x1={padding.left} y1={mapY(v)} x2={width-padding.right} y2={mapY(v)} className="stroke-slate-200 dark:stroke-slate-700" strokeDasharray="2 2"/><text x={padding.left-5} y={mapY(v)+3} textAnchor="end" className="fill-slate-500">{type === 'cop' ? v.toFixed(1) : v + 'kW'}</text></g> ))}
                         {[-20, 0, 20, 40, 60].map(t => <text key={t} x={mapX(t)} y={padding.top + innerHeight + 18} textAnchor="middle" className="fill-slate-500">{t}°F</text>)}
                         <path d={points.join(' ')} fill="none" className={type === 'cop' ? "stroke-blue-500" : "stroke-orange-500"} strokeWidth="2" strokeLinejoin="round"/>
                     </svg>
@@ -1103,142 +623,26 @@
             };
 
             const renderImpactGraph = () => {
-                const width = 800, height = 690, padding = { top: 55, right: 70, bottom: 60, left: 60 };
-                const innerWidth = width - padding.left - padding.right;
-                const topPaneHeight = 300;
-                const paneGap = 40; 
-                const bottomPaneHeight = 200;
-                
-                const visualBinData = binData;
-
-                const yMaxHours = Math.max(100, Math.max(...visualBinData.map(d => d.hours)) * 1.1);
-                const yMaxKw = 35;
-                
-                // Calculate kWh data
-                const baselineForUpgrades = changeSetpoint ? upgradedSetpoint : heatingSetpoint;
-                const setpointEffective = useSmartThermostat ? baselineForUpgrades - (2 * awayHours / 24) : baselineForUpgrades;
-                
-                const kwhData = visualBinData.map(d => {
-                    const baseLoad = getLoadAtTemp(d.temp, currentUA, heatingSetpoint);
-                    const upLoad = getLoadAtTemp(d.temp, upgradedUA, setpointEffective);
-                    return {
-                        temp: d.temp,
-                        baseKwh: d.hours * baseLoad,
-                        upKwh: d.hours * upLoad
-                    };
-                });
-                
-                const yMaxKwh = Math.max(10, Math.max(...kwhData.map(d => d.baseKwh)) * 1.1);
-
-                const mapX = (t) => padding.left + ((t - (-20)) / (75 - (-20))) * innerWidth;
-                const mapYHours = (h) => padding.top + topPaneHeight - (h / yMaxHours) * topPaneHeight;
-                const mapYKw = (kw) => padding.top + topPaneHeight - (kw / yMaxKw) * topPaneHeight;
-                
-                // Inverted Y axis for kWh, correctly starting AFTER the gap
-                const mapYKwh = (kwh) => padding.top + topPaneHeight + paneGap + (kwh / yMaxKwh) * bottomPaneHeight;
-
-                const upgradedBalancePoint = setpointEffective - ((internalGains / 1000) / upgradedUA);
-
-                const baseLoadPoints = [];
-                const upgradedLoadPoints = [];
-                for(let t = -20; t <= 75; t += 5) {
-                    const baseKw = getLoadAtTemp(t, currentUA, heatingSetpoint);
-                    const upKw = getLoadAtTemp(t, upgradedUA, setpointEffective);
-                    baseLoadPoints.push(`${t === -20 ? 'M' : 'L'} ${mapX(t)} ${mapYKw(baseKw)}`);
-                    upgradedLoadPoints.push(`${t === -20 ? 'M' : 'L'} ${mapX(t)} ${mapYKw(upKw)}`);
-                }
-
+                const width = 800, height = 690, padding = { top: 55, right: 70, bottom: 60, left: 60 }, innerWidth = width - padding.left - padding.right, topPaneHeight = 300, paneGap = 40, bottomPaneHeight = 200;
+                const visualBinData = binData, yMaxHours = Math.max(100, Math.max(...visualBinData.map(d => d.hours)) * 1.1), yMaxKw = 35;
+                const baselineForUpgrades = changeSetpoint ? upgradedSetpoint : heatingSetpoint, setpointEffective = useSmartThermostat ? baselineForUpgrades - (2 * awayHours / 24) : baselineForUpgrades;
+                const kwhData = visualBinData.map(d => ({ temp: d.temp, baseKwh: d.hours * getLoadAtTemp(d.temp, currentUA, heatingSetpoint), upKwh: d.hours * getLoadAtTemp(d.temp, upgradedUA, setpointEffective) }));
+                const yMaxKwh = Math.max(10, Math.max(...kwhData.map(d => d.baseKwh)) * 1.1), mapX = (t) => padding.left + ((t - (-20)) / (75 - (-20))) * innerWidth, mapYHours = (h) => padding.top + topPaneHeight - (h / yMaxHours) * topPaneHeight, mapYKw = (kw) => padding.top + topPaneHeight - (kw / yMaxKw) * topPaneHeight, mapYKwh = (kwh) => padding.top + topPaneHeight + paneGap + (kwh / yMaxKwh) * bottomPaneHeight;
+                const upgradedBalancePoint = setpointEffective - ((internalGains / 1000) / upgradedUA), baseLoadPoints = [], upgradedLoadPoints = [];
+                for(let t = -20; t <= 75; t += 5) { baseLoadPoints.push(`${t === -20 ? 'M' : 'L'} ${mapX(t)} ${mapYKw(getLoadAtTemp(t, currentUA, heatingSetpoint))}`); upgradedLoadPoints.push(`${t === -20 ? 'M' : 'L'} ${mapX(t)} ${mapYKw(getLoadAtTemp(t, upgradedUA, setpointEffective))}`); }
                 return (
                     <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto text-xs overflow-visible font-sans">
-                        {/* --- TOP PANE: Hours & kW --- */}
-                        {[0, 0.5, 1].map(r => (
-                            <g key={`y-left-${r}`}>
-                                <line x1={padding.left} y1={mapYHours(yMaxHours*r)} x2={width-padding.right} y2={mapYHours(yMaxHours*r)} className="stroke-slate-200 dark:stroke-slate-700" strokeDasharray="4 4"/>
-                                <text x={padding.left-10} y={mapYHours(yMaxHours*r)+4} textAnchor="end" className="fill-slate-500 font-bold">{Math.round(yMaxHours*r)}h</text>
-                            </g>
-                        ))}
-                        {[0, 10, 20, 30].map(kw => (
-                            <g key={`y-right-${kw}`}>
-                                <text x={width - padding.right + 10} y={mapYKw(kw)+4} textAnchor="start" className="fill-orange-500 font-medium">{kw} kW</text>
-                            </g>
-                        ))}
-
-                        {/* Bars: Frequency (Hours) */}
-                        {visualBinData.map(d => d.hours > 0 && (
-                            <rect key={`hr-${d.temp}`} x={mapX(d.temp-0.5)} y={mapYHours(d.hours)} width={Math.max(1, mapX(1)-mapX(0)-1)} height={mapYHours(0)-mapYHours(d.hours)} className="fill-blue-400 dark:fill-blue-700 opacity-60"/>
-                        ))}
-
-                        {/* Curves: Load (kW) */}
-                        <path d={baseLoadPoints.join(' ')} fill="none" className="stroke-orange-500 opacity-20" strokeWidth="1.5" strokeDasharray="4 2" strokeLinejoin="round"/>
-                        <path d={upgradedLoadPoints.join(' ')} fill="none" className="stroke-orange-500" strokeWidth="2.5" strokeDasharray="6 3" strokeLinejoin="round"/>
-
-                        {/* --- BOTTOM PANE: Energy (kWh) --- */}
-                        {(() => {
-                            const ticks = [];
-                            for (let v = 250; v < yMaxKwh; v += 250) ticks.push(v);
-                            return [0, ...ticks].map(v => (
-                                <g key={`y-kwh-grid-${v}`}>
-                                    <line x1={padding.left} y1={mapYKwh(v)} x2={width-padding.right} y2={mapYKwh(v)} className="stroke-slate-200 dark:stroke-slate-700" strokeDasharray="2 2"/>
-                                    <text x={width - padding.right + 10} y={mapYKwh(v)+4} textAnchor="start" className="fill-emerald-600 dark:fill-emerald-400 font-medium">{v} kWh</text>
-                                </g>
-                            ));
-                        })()}
-
-                        {/* Bars: Energy (kWh) */}
-                        {kwhData.map(d => d.baseKwh > 0 && (
-                            <g key={`kwh-group-${d.temp}`}>
-                                {/* Baseline (Background) */}
-                                <rect x={mapX(d.temp-0.4)} y={padding.top + topPaneHeight + paneGap} width={Math.max(1, mapX(1)-mapX(0)-0.8)} height={mapYKwh(d.baseKwh)-(padding.top + topPaneHeight + paneGap)} className="fill-slate-300 dark:fill-slate-700"/>
-                                {/* Upgraded (Foreground) */}
-                                {d.upKwh > 0 && (
-                                    <rect x={mapX(d.temp-0.4)} y={padding.top + topPaneHeight + paneGap} width={Math.max(1, mapX(1)-mapX(0)-0.8)} height={mapYKwh(d.upKwh)-(padding.top + topPaneHeight + paneGap)} className="fill-emerald-500 dark:fill-emerald-600"/>
-                                )}
-                            </g>
-                        ))}
-
-                        {/* --- SHARED ELEMENTS --- */}
-                        {/* Pane Borders */}
-                        <line x1={padding.left} y1={padding.top + topPaneHeight} x2={width-padding.right} y2={padding.top+topPaneHeight} className="stroke-slate-300 dark:stroke-slate-600" />
-                        <line x1={padding.left} y1={padding.top + topPaneHeight + paneGap} x2={width-padding.right} y2={padding.top+topPaneHeight + paneGap} className="stroke-slate-300 dark:stroke-slate-600" />
-                        
-                        {/* X-Axis Labels (Centered in Gutter) */}
-                        {[-20, 0, 20, 40, 60].map(t => (
-                            <g key={`x-${t}`}>
-                                <line x1={mapX(t)} y1={padding.top + topPaneHeight} x2={mapX(t)} y2={padding.top + topPaneHeight + 5} className="stroke-slate-300 dark:stroke-slate-600" />
-                                <line x1={mapX(t)} y1={padding.top + topPaneHeight + paneGap - 5} x2={mapX(t)} y2={padding.top + topPaneHeight + paneGap} className="stroke-slate-300 dark:stroke-slate-600" />
-                                <text x={mapX(t)} y={padding.top + topPaneHeight + (paneGap / 2) + 4} textAnchor="middle" className="fill-slate-500 font-bold text-sm">{t}°F</text>
-                            </g>
-                        ))}
-
-                        {/* Vertical Indicators */}
-                        <line x1={mapX(setpointEffective)} y1={padding.top} x2={mapX(setpointEffective)} y2={padding.top + topPaneHeight + paneGap + bottomPaneHeight} className="stroke-slate-300 dark:stroke-slate-600 stroke-1" strokeDasharray="2 2"/>
-                        <text x={mapX(setpointEffective)} y={10} textAnchor="middle" className="fill-slate-400 text-[10px]">Setpoint ({Math.round(setpointEffective)}°F)</text>
-                        
-                        <line x1={mapX(upgradedBalancePoint)} y1={padding.top} x2={mapX(upgradedBalancePoint)} y2={padding.top + topPaneHeight + paneGap + bottomPaneHeight} className="stroke-red-400 stroke-2" strokeDasharray="4 4"/>
-                        <text x={mapX(upgradedBalancePoint)} y={22} textAnchor="middle" className="fill-red-400 font-bold text-[10px]">Balance Point ({Math.round(upgradedBalancePoint)}°F)</text>
-
-                        {/* Legend - Two Lines */}
-                        <g transform={`translate(${padding.left}, ${height - 45})`}>
-                            {/* Line 1: Energy Usage */}
-                            <g>
-                                <rect width={10} height={10} className="fill-slate-300 dark:fill-slate-700" rx={2}/>
-                                <text x={15} y={9} className="fill-slate-500 text-[9px] font-bold uppercase">Baseline Energy Usage</text>
-                                
-                                <rect x={145} width={10} height={10} className="fill-emerald-500 dark:fill-emerald-600" rx={2}/>
-                                <text x={160} y={9} className="fill-emerald-600 dark:fill-emerald-400 text-[9px] font-bold uppercase">Upgraded Energy Usage</text>
-                            </g>
-                            {/* Line 2: Heating Metrics */}
-                            <g transform="translate(0, 18)">
-                                <rect width={10} height={10} className="fill-blue-400 dark:fill-blue-700" rx={2}/>
-                                <text x={15} y={9} className="fill-blue-500 text-[9px] font-bold uppercase">Heating Hours</text>
-
-                                <line x1={100} y1={5} x2={115} y2={5} className="stroke-orange-500 opacity-40" strokeWidth="2" strokeDasharray="2 1"/>
-                                <text x={120} y={9} className="fill-orange-600 opacity-60 text-[9px] font-bold uppercase">Heat Power Needed</text>
-
-                                <line x1={240} y1={5} x2={255} y2={5} className="stroke-orange-500" strokeWidth="2" strokeDasharray="4 2"/>
-                                <text x={260} y={9} className="fill-orange-600 text-[9px] font-bold uppercase">Upgraded Heat Power Needed</text>
-                            </g>
-                        </g>
+                        {[0, 0.5, 1].map(r => ( <g key={`y-left-${r}`}><line x1={padding.left} y1={mapYHours(yMaxHours*r)} x2={width-padding.right} y2={mapYHours(yMaxHours*r)} className="stroke-slate-200 dark:stroke-slate-700" strokeDasharray="4 4"/><text x={padding.left-10} y={mapYHours(yMaxHours*r)+4} textAnchor="end" className="fill-slate-500 font-bold">{Math.round(yMaxHours*r)}h</text></g> ))}
+                        {[0, 10, 20, 30].map(kw => ( <g key={`y-right-${kw}`}><text x={width - padding.right + 10} y={mapYKw(kw)+4} textAnchor="start" className="fill-orange-500 font-medium">{kw} kW</text></g> ))}
+                        {visualBinData.map(d => d.hours > 0 && ( <rect key={`hr-${d.temp}`} x={mapX(d.temp-0.5)} y={mapYHours(d.hours)} width={Math.max(1, mapX(1)-mapX(0)-1)} height={mapYHours(0)-mapYHours(d.hours)} className="fill-blue-400 dark:fill-blue-700 opacity-60"/> ))}
+                        <path d={baseLoadPoints.join(' ')} fill="none" className="stroke-orange-500 opacity-20" strokeWidth="1.5" strokeDasharray="4 2" strokeLinejoin="round"/><path d={upgradedLoadPoints.join(' ')} fill="none" className="stroke-orange-500" strokeWidth="2.5" strokeDasharray="6 3" strokeLinejoin="round"/>
+                        {(() => { const ticks = []; for (let v = 250; v < yMaxKwh; v += 250) ticks.push(v); return [0, ...ticks].map(v => ( <g key={`y-kwh-grid-${v}`}><line x1={padding.left} y1={mapYKwh(v)} x2={width-padding.right} y2={mapYKwh(v)} className="stroke-slate-200 dark:stroke-slate-700" strokeDasharray="2 2"/><text x={width - padding.right + 10} y={mapYKwh(v)+4} textAnchor="start" className="fill-emerald-600 dark:fill-emerald-400 font-medium">{v} kWh</text></g> )); })()}
+                        {kwhData.map(d => d.baseKwh > 0 && ( <g key={`kwh-group-${d.temp}`}><rect x={mapX(d.temp-0.4)} y={padding.top + topPaneHeight + paneGap} width={Math.max(1, mapX(1)-mapX(0)-0.8)} height={mapYKwh(d.baseKwh)-(padding.top + topPaneHeight + paneGap)} className="fill-slate-300 dark:fill-slate-700"/>{d.upKwh > 0 && ( <rect x={mapX(d.temp-0.4)} y={padding.top + topPaneHeight + paneGap} width={Math.max(1, mapX(1)-mapX(0)-0.8)} height={mapYKwh(d.upKwh)-(padding.top + topPaneHeight + paneGap)} className="fill-emerald-500 dark:fill-emerald-600"/> )}</g> ))}
+                        <line x1={padding.left} y1={padding.top + topPaneHeight} x2={width-padding.right} y2={padding.top+topPaneHeight} className="stroke-slate-300 dark:stroke-slate-600" /><line x1={padding.left} y1={padding.top + topPaneHeight + paneGap} x2={width-padding.right} y2={padding.top+topPaneHeight + paneGap} className="stroke-slate-300 dark:stroke-slate-600" />
+                        {[-20, 0, 20, 40, 60].map(t => ( <g key={`x-${t}`}><line x1={mapX(t)} y1={padding.top + topPaneHeight} x2={mapX(t)} y2={padding.top + topPaneHeight + 5} className="stroke-slate-300 dark:stroke-slate-600" /><line x1={mapX(t)} y1={padding.top + topPaneHeight + paneGap - 5} x2={mapX(t)} y2={padding.top + topPaneHeight + paneGap} className="stroke-slate-300 dark:stroke-slate-600" /><text x={mapX(t)} y={padding.top + topPaneHeight + (paneGap / 2) + 4} textAnchor="middle" className="fill-slate-500 font-bold text-sm">{t}°F</text></g> ))}
+                        <line x1={mapX(setpointEffective)} y1={padding.top} x2={mapX(setpointEffective)} y2={padding.top + topPaneHeight + paneGap + bottomPaneHeight} className="stroke-slate-300 dark:stroke-slate-600 stroke-1" strokeDasharray="2 2"/><text x={mapX(setpointEffective)} y={10} textAnchor="middle" className="fill-slate-400 text-[10px]">Setpoint ({Math.round(setpointEffective)}°F)</text>
+                        <line x1={mapX(upgradedBalancePoint)} y1={padding.top} x2={mapX(upgradedBalancePoint)} y2={padding.top + topPaneHeight + paneGap + bottomPaneHeight} className="stroke-red-400 stroke-2" strokeDasharray="4 4"/><text x={mapX(upgradedBalancePoint)} y={22} textAnchor="middle" className="fill-red-400 font-bold text-[10px]">Balance Point ({Math.round(upgradedBalancePoint)}°F)</text>
+                        <g transform={`translate(${padding.left}, ${height - 45})`}><g><rect width={10} height={10} className="fill-slate-300 dark:fill-slate-700" rx={2}/><text x={15} y={9} className="fill-slate-500 text-[9px] font-bold uppercase">Baseline Energy Usage</text><rect x={145} width={10} height={10} className="fill-emerald-500 dark:fill-emerald-600" rx={2}/><text x={160} y={9} className="fill-emerald-600 dark:fill-emerald-400 text-[9px] font-bold uppercase">Upgraded Energy Usage</text></g><g transform="translate(0, 18)"><rect width={10} height={10} className="fill-blue-400 dark:fill-blue-700" rx={2}/><text x={15} y={9} className="fill-blue-500 text-[9px] font-bold uppercase">Heating Hours</text><line x1={100} y1={5} x2={115} y2={5} className="stroke-orange-500 opacity-40" strokeWidth="2" strokeDasharray="2 1"/><text x={120} y={9} className="fill-orange-600 opacity-60 text-[9px] font-bold uppercase">Heat Power Needed</text><line x1={240} y1={5} x2={255} y2={5} className="stroke-orange-500" strokeWidth="2" strokeDasharray="4 2"/><text x={260} y={9} className="fill-orange-600 text-[9px] font-bold uppercase">Upgraded Heat Power Needed</text></g></g>
                     </svg>
                 );
             };
@@ -1252,16 +656,17 @@
                             <ul className="space-y-2">
                                 <li className="flex gap-2 items-start"><Icon name="ExternalLink" size={14} className="mt-1 flex-shrink-0 text-blue-500"/><p><strong>ASHRAE Fundamentals:</strong> Basis for Variable Base Degree Day (VBDD) modeling. <a href="https://www.ashrae.org/technical-resources/bookstore/handbook-of-fundamentals" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">Reference</a></p></li>
                                 <li className="flex gap-2 items-start"><Icon name="ExternalLink" size={14} className="mt-1 flex-shrink-0 text-blue-500"/><p><strong>MA Rates:</strong> Eversource Seasonal Delivery Discount (~$0.073/kWh). <a href="https://www.eversource.com/residential/account-billing/manage-bill/about-your-bill/rates-tariffs/electric-delivery-rates" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">Link</a></p></li>
-                                <li className="flex gap-2 items-start"><Icon name="ExternalLink" size={14} className="mt-1 flex-shrink-0 text-blue-500"/><p><strong>Climate Data:</strong> Open-Meteo ERA5 Archive (Historical 2025). <a href="https://open-meteo.com/en/docs/historical-weather-api" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">Open-Meteo API</a></p></li>                                <li className="flex gap-2 items-start"><Icon name="ExternalLink" size={14} className="mt-1 flex-shrink-0 text-blue-500"/><p><strong>National Averages:</strong> U.S. Energy Information Administration (EIA) monthly reporting. <a href="https://www.eia.gov/" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">EIA website</a></p></li>
+                                <li className="flex gap-2 items-start"><Icon name="ExternalLink" size={14} className="mt-1 flex-shrink-0 text-blue-500"/><p><strong>Climate Data:</strong> Open-Meteo ERA5 Archive (Historical 2025). <a href="https://open-meteo.com/en/docs/historical-weather-api" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">Open-Meteo API</a></p></li>
+                                <li className="flex gap-2 items-start"><Icon name="ExternalLink" size={14} className="mt-1 flex-shrink-0 text-blue-500"/><p><strong>National Averages:</strong> U.S. Energy Information Administration (EIA) monthly reporting. <a href="https://www.eia.gov/" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">EIA website</a></p></li>
                             </ul>
                         </div>
                         <div className="space-y-3">
                             <h3 className="font-bold text-slate-800 dark:text-slate-200 uppercase text-xs tracking-widest font-sans">Physics & Equipment</h3>
                             <ul className="space-y-2 list-disc pl-4">
-                                <li><strong>Conversions:</strong> Standard physics conversions (40.6 kWh/gal for Oil, 29.3 kWh/therm for Gas, 26.8 kWh/gal for Propane).</li>                                <li><strong>Load Profile:</strong> Dynamic $UA$ (heat loss coefficient) adjusted for surface-area-to-volume ratio ($1/L$) based on house size.</li>
+                                <li><strong>Conversions:</strong> Standard physics conversions (40.6 kWh/gal for Oil, 29.3 kWh/therm for Gas, 26.8 kWh/gal for Propane).</li>
+                                <li><strong>Load Profile:</strong> Dynamic $UA$ (heat loss coefficient) adjusted for surface-area-to-volume ratio ($1/L$) based on house size.</li>
                                 <li><strong>Internal Gains:</strong> Default internal heat generation (e.g. 600W avg) creates the Balance Point.</li>
                                 <li><strong>Equipment:</strong> COP performance curves derived from the <a href="https://neep.org/heating-electrification/ccashp-specification-product-list" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">NEEP Product List</a> and <a href="https://docs.nrel.gov/docs/fy23osti/85081.pdf" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">NREL physical extrapolation</a>.</li>
-                                <li><strong>Upgrades:</strong> Manual maintenance recovery modeled at a 105% efficiency gain over the degraded baseline.</li>
                                 <li><strong>Manual J:</strong> For true precision, detailed load modeling should be performed at a site like <a href="https://www.coolcalc.com/" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">Cool Calc</a>.</li>
                             </ul>
                         </div>
@@ -1272,98 +677,44 @@
             return (
                 <div className="min-h-screen bg-slate-50 dark:bg-slate-900 p-4 md:p-8 flex flex-col items-center font-sans transition-colors duration-200">
                     <div className="w-full max-w-5xl flex flex-col gap-6">
-                        
                         <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-700 flex flex-col md:flex-row justify-between items-center gap-4">
                             <div className="flex flex-col md:flex-row items-center gap-4">
-                                <h1 className="text-3xl font-bold text-slate-900 dark:text-white flex items-center gap-3">
-                                    <Icon name="TrendingUp" className="text-blue-600" size={32} /> Heating Cost Comparator
-                                </h1>
+                                <h1 className="text-3xl font-bold text-slate-900 dark:text-white flex items-center gap-3"><Icon name="TrendingUp" className="text-blue-600" size={32} /> Heating Cost Comparator</h1>
                                 {(zipCacheCount > 0 || addrCacheCount > 0) && (
                                     <div className="flex items-center gap-2 px-3 py-1 bg-slate-100 dark:bg-slate-700 rounded-full text-[10px] font-bold text-slate-500 uppercase">
                                         <span>{zipCacheCount} ZIPs • {addrCacheCount} Addresses Cached</span>
                                         <button onClick={clearCache} className="text-red-500 hover:text-red-700 ml-1 border-l pl-2 dark:border-slate-600">Clear All</button>
                                     </div>
                                 )}
-                                </div>                            {currentView > 1 && (
-                                <button onClick={() => {
-                                    setCurrentView(1);
-                                    setActiveZipCode('');
-                                    setActiveAddress('');
-                                    setZipCode('');
-                                    setAddress('');
-                                    setLookupMessage('');
-                                    setFetchedBinData(null);
-                                }} className="text-sm font-bold text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 transition-colors flex items-center gap-1">
-                                    <Icon name="ArrowLeft" size={16} /> Reset Configuration
-                                </button>
-                            )}
+                            </div>
+                            {currentView > 1 && ( <button onClick={() => { setCurrentView(1); setActiveZipCode(''); setActiveAddress(''); setZipCode(''); setAddress(''); setLookupMessage(''); setFetchedBinData(null); }} className="text-sm font-bold text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 transition-colors flex items-center gap-1"><Icon name="ArrowLeft" size={16} /> Reset Configuration</button> )}
                         </div>
 
-                        {/* --- VIEW 1 & 2: About My Household --- */}
                         {currentView <= 2 && (
                             <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-700">
                                 <h2 className="text-xl font-bold dark:text-white mb-6 flex items-center gap-2"><Icon name="Home" size={20} className="text-slate-400"/> About my household</h2>
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                     <SelectControl iconName="Home" label="Home Size" value={homeSize} options={HOME_SIZE_OPTIONS} onChange={setHomeSize} colorClass="text-slate-500" />
                                     <SelectControl iconName="Shield" label="Current Insulation" value={homeInsulation} options={INSULATION_OPTIONS} onChange={setHomeInsulation} colorClass="text-emerald-500" />
-                                    
                                     <SelectControl iconName={systemIcon} label="Primary Heating System" value={currentSystemVal} options={COMBINED_SYSTEM_OPTIONS} onChange={handleSystemChange} colorClass={systemColor} />
                                     <SliderControl iconName="ThermometerSnowflake" label="Heating Setpoint" value={heatingSetpoint} min={50} max={75} step={1} unit="°F" onChange={setHeatingSetpoint} colorClass="text-orange-500" />
-
                                     <div className="md:col-span-2">
                                         <label className="flex items-center gap-2 font-medium mb-2 dark:text-slate-200"><Icon name="MapPin" size={18} className="text-slate-500"/> Location {hasPropKey && "& Property (Optional)"}</label>
                                         <div className="flex flex-col gap-3">
                                             <div className="flex flex-wrap gap-2">
-                                                <div className={`flex-1 ${hasPropKey ? 'min-w-[200px]' : 'md:max-w-xs'}`}>
-                                                    <input type="text" value={zipCode} onChange={e => setZipCode(e.target.value)} disabled={isLoadingData} placeholder="ZIP Code (e.g. 02138)" className="w-full px-3 py-2 border rounded-lg bg-white dark:bg-slate-900 dark:text-white dark:border-slate-700 focus:ring-2 focus:ring-blue-500 outline-none disabled:opacity-50"/>
-                                                </div>
-                                                {hasPropKey && (
-                                                    <div className="flex-[2] min-w-[280px]">
-                                                        <input type="text" value={address} onChange={e => setAddress(e.target.value)} disabled={isLoadingData} placeholder="Street Address (Optional, for SqFt lookup)" className="w-full px-3 py-2 border rounded-lg bg-white dark:bg-slate-900 dark:text-white dark:border-slate-700 focus:ring-2 focus:ring-blue-500 outline-none disabled:opacity-50"/>
-                                                    </div>
-                                                )}
-                                                <button 
-                                                    onClick={(e) => handleZipLookup(e, true, false)} 
-                                                    disabled={isLoadingData || zipCode.length < 5 || (activeZipCode === cleanZip && activeAddress === address.trim())} 
-                                                    className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition-colors whitespace-nowrap font-bold flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
-                                                >
-                                                    {isLoadingData ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Icon name="TrendingUp" size={18} />}
-                                                    Load data
-                                                </button>
-                                                {activeZipCode && activeZipCode === cleanZip && activeAddress === address.trim() && !isLoadingData && (
-                                                    <button 
-                                                        onClick={(e) => handleZipLookup(e, true, true)} 
-                                                        className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors group" 
-                                                        title="Force fresh data fetch"
-                                                    >
-                                                        <div className="flex items-center gap-1.5 px-1">
-                                                            <Icon name="Settings" size={16} className="group-hover:rotate-180 transition-transform duration-500" />
-                                                            <span className="text-xs font-bold uppercase tracking-wider">Re-fetch</span>
-                                                        </div>
-                                                    </button>
-                                                )}                                            </div>
-                                                {/* Data Status Indicators */}
-                                                {activeZipCode && (
-                                                    <div className="flex flex-wrap gap-2 mt-2">
-                                                        <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border shadow-sm ${isUsingFallback ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
-                                                            <Icon name={isUsingFallback ? "Settings" : "CheckSquare"} size={10} />
-                                                            Climate: {isUsingFallback ? 'Fallback Model (Regional)' : 'Loaded from Historic Data (2025)' }
-                                                        </div>
-                                                        <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border shadow-sm ${priceSource === 'regional' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
-                                                            <Icon name={priceSource === 'regional' ? "Settings" : "CheckSquare"} size={10} />
-                                                            Energy Rates: {priceSource === 'regional' ? 'Fallback Model (Regional)' : `Loaded from Current Monthly Data (EIA ${ZIP_TO_STATE[activeZipCode.substring(0,2)] || ''})` }
-                                                        </div>
-                                                        <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border shadow-sm ${propSource === 'none' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
-                                                            <Icon name={propSource === 'none' ? "Settings" : "CheckSquare"} size={10} />
-                                                            Property: {propSource === 'none' ? 'Manual Input' : `Loaded from Public Record (${propSource.toUpperCase()})` }
-                                                        </div>
-                                                        </div>                                                )}
-                                                {isLoadingData && (                                                <div className="w-full md:max-w-md mt-2">
-                                                    <div className="w-full bg-slate-100 dark:bg-slate-700 rounded-full h-2 overflow-hidden">
-                                                        <div className="bg-blue-600 h-full transition-all duration-300 ease-out" style={{ width: `${loadProgress}%` }}></div>
-                                                    </div>
+                                                <div className={`flex-1 ${hasPropKey ? 'min-w-[200px]' : 'md:max-w-xs'}`}><input type="text" value={zipCode} onChange={e => setZipCode(e.target.value)} disabled={isLoadingData} placeholder="ZIP Code" className="w-full px-3 py-2 border rounded-lg bg-white dark:bg-slate-900 dark:text-white dark:border-slate-700 focus:ring-2 focus:ring-blue-500 outline-none disabled:opacity-50"/></div>
+                                                {hasPropKey && ( <div className="flex-[2] min-w-[280px]"><input type="text" value={address} onChange={e => setAddress(e.target.value)} disabled={isLoadingData} placeholder="Street Address (Optional)" className="w-full px-3 py-2 border rounded-lg bg-white dark:bg-slate-900 dark:text-white dark:border-slate-700 focus:ring-2 focus:ring-blue-500 outline-none disabled:opacity-50"/></div> )}
+                                                <button onClick={(e) => handleZipLookup(e, true, false)} disabled={isLoadingData || cleanZip.length < 5 || (activeZipCode === cleanZip && activeAddress === address.trim())} className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition-colors whitespace-nowrap font-bold flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm">{isLoadingData ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Icon name="TrendingUp" size={18} />}Load data</button>
+                                                {activeZipCode && activeZipCode === cleanZip && activeAddress === address.trim() && !isLoadingData && ( <button onClick={(e) => handleZipLookup(e, true, true)} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors group" title="Force fresh data fetch"><div className="flex items-center gap-1.5 px-1"><Icon name="Settings" size={16} className="group-hover:rotate-180 transition-transform duration-500" /><span className="text-xs font-bold uppercase tracking-wider">Re-fetch</span></div></button> )}
+                                            </div>
+                                            {activeZipCode && (
+                                                <div className="flex flex-wrap gap-2 mt-2">
+                                                    <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border shadow-sm ${isUsingFallback ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}><Icon name={isUsingFallback ? "Settings" : "CheckSquare"} size={10} />Climate: {isUsingFallback ? 'Fallback Model (Regional)' : 'Loaded from Historic Data (2025)' }</div>
+                                                    <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border shadow-sm ${priceSource === 'regional' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}><Icon name={priceSource === 'regional' ? "Settings" : "CheckSquare"} size={10} />Energy Rates: {priceSource === 'regional' ? 'Fallback Model (Regional)' : `Loaded from Current Monthly Data (EIA ${ZIP_TO_STATE[activeZipCode.substring(0,2)] || ''})` }</div>
+                                                    <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border shadow-sm ${propSource === 'none' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}><Icon name={propSource === 'none' ? "Settings" : "CheckSquare"} size={10} />Property: {propSource === 'none' ? 'Manual Input' : `Loaded from Public Record (${propSource.toUpperCase()})` }</div>
                                                 </div>
                                             )}
+                                            {isLoadingData && ( <div className="w-full md:max-w-md mt-2"><div className="w-full bg-slate-100 dark:bg-slate-700 rounded-full h-2 overflow-hidden"><div className="bg-blue-600 h-full transition-all duration-300 ease-out" style={{ width: `${loadProgress}%` }}></div></div></div> )}
                                             {lookupMessage && <p className={`text-xs font-medium ${lookupMessage.startsWith('Error') ? 'text-red-500' : 'text-blue-500'}`}>{lookupMessage}</p>}
                                         </div>
                                     </div>
@@ -1371,46 +722,28 @@
                             </div>
                         )}
 
-                        {/* --- VIEW 2 ONLY: Baseline Analysis & Sanity Check --- */}
                         {currentView === 2 && (
                             <>
-                                {/* Sanity check Card */}
                                 <div className="bg-blue-50 dark:bg-slate-800 p-6 md:p-8 rounded-2xl shadow-sm border border-blue-100 dark:border-slate-700 animate-in fade-in slide-in-from-bottom-4 duration-500">
                                     <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-2">Sanity check</h2>
                                     <p className="text-sm text-slate-600 dark:text-slate-400 mb-6">If this heating cost looks close to your actual annual heating cost, we can move on. Otherwise we should update the model assumptions below.</p>
-                                    
                                     <div className="mb-8 max-w-2xl">
                                         {(() => {
                                             const bar = costBars.find(b => b.id === primaryHeating) || costBars[0];
                                             return (
                                                 <div className="p-4 rounded-xl border bg-yellow-50 dark:bg-yellow-900/20 border-yellow-300 dark:border-yellow-700 ring-2 ring-yellow-400">
                                                     <div className="flex justify-between font-bold mb-2 dark:text-white items-center">
-                                                        <span className="flex items-center gap-2">
-                                                            <div className={`w-5 h-5 rounded ${bar.colorClass} flex items-center justify-center text-white`}>
-                                                                <Icon name={bar.iconName} size={12}/>
-                                                            </div>
-                                                            <span className="text-base">{bar.label}</span>
-                                                            <span className="text-[10px] bg-yellow-200 dark:bg-yellow-800 text-yellow-800 dark:text-yellow-200 px-1.5 py-0.5 rounded-full font-black uppercase tracking-wider">Estimated Baseline</span>
-                                                        </span>
-                                                        <span className="px-2 py-1 rounded-md text-xl font-black bg-yellow-100 dark:bg-yellow-900/40 text-yellow-800 dark:text-yellow-300">
-                                                            ${Math.round(bar.cost).toLocaleString()}
-                                                        </span>
+                                                        <span className="flex items-center gap-2"><div className={`w-5 h-5 rounded ${bar.colorClass} flex items-center justify-center text-white`}><Icon name={bar.iconName} size={12}/></div><span className="text-base">{bar.label}</span><span className="text-[10px] bg-yellow-200 dark:bg-yellow-800 text-yellow-800 dark:text-yellow-200 px-1.5 py-0.5 rounded-full font-black uppercase tracking-wider">Estimated Baseline</span></span>
+                                                        <span className="px-2 py-1 rounded-md text-xl font-black bg-yellow-100 dark:bg-yellow-900/40 text-yellow-800 dark:text-yellow-300">${Math.round(bar.cost).toLocaleString()}</span>
                                                     </div>
-                                                    <div className="w-full bg-slate-100 dark:bg-slate-700 rounded-full h-4 overflow-hidden">
-                                                        <div className={`${bar.colorClass} h-full transition-all duration-1000 ease-out`} style={{ width: `${(bar.cost/maxAnnualCost)*100}%` }}></div>
-                                                    </div>
+                                                    <div className="w-full bg-slate-100 dark:bg-slate-700 rounded-full h-4 overflow-hidden"><div className={`${bar.colorClass} h-full transition-all duration-1000 ease-out`} style={{ width: `${(bar.cost/maxAnnualCost)*100}%` }}></div></div>
                                                 </div>
                                             );
                                         })()}
                                     </div>
-
-                                    <div className="flex flex-col sm:flex-row gap-4">
-                                        <button disabled className="px-6 py-3 bg-white dark:bg-slate-900 text-slate-400 dark:text-slate-600 border border-slate-200 dark:border-slate-800 rounded-xl cursor-not-allowed font-medium shadow-sm transition-opacity">Load from my energy bill</button>
-                                        <button onClick={() => { setCurrentView(3); window.scrollTo({top: 0, behavior: 'smooth'}); }} className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-md transition-all transform active:scale-95">Looks right, how can I save?</button>
-                                    </div>
+                                    <div className="flex flex-col sm:flex-row gap-4"><button disabled className="px-6 py-3 bg-white dark:bg-slate-900 text-slate-400 dark:text-slate-600 border border-slate-200 dark:border-slate-800 rounded-xl cursor-not-allowed font-medium shadow-sm transition-opacity">Load from my energy bill</button><button onClick={() => { setCurrentView(3); window.scrollTo({top: 0, behavior: 'smooth'}); }} className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-md transition-all transform active:scale-95">Looks right, how can I save?</button></div>
                                 </div>
 
-                                {/* Baseline annual cost comparison */}
                                 <div className="bg-white dark:bg-slate-800 p-6 md:p-8 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-700 animate-in fade-in slide-in-from-bottom-4 duration-500 delay-75">
                                     <h2 className="text-xl font-bold dark:text-white mb-2">Baseline annual heating cost comparison</h2>
                                     <p className="text-sm text-slate-500 dark:text-slate-400 mb-6 italic">Estimated total heating cost for your current home setup before any upgrades.</p>
@@ -1421,9 +754,7 @@
                                                 <div key={bar.id} className={`p-4 rounded-xl border transition-all ${isPrimary ? 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-300 dark:border-yellow-700 ring-2 ring-yellow-400' : 'border-slate-100 dark:border-slate-700'}`}>
                                                     <div className="flex justify-between font-bold mb-2 dark:text-white items-center">
                                                         <span className="flex items-center gap-2"><div className={`w-5 h-5 rounded ${bar.colorClass} flex items-center justify-center text-white`}><Icon name={bar.iconName} size={12}/></div><span className={isPrimary ? "text-base" : "text-sm"}>{bar.label}</span>{isPrimary && <span className="text-[10px] bg-yellow-200 dark:bg-yellow-800 text-yellow-800 dark:text-yellow-200 px-1.5 py-0.5 rounded-full font-black uppercase">Baseline</span>}</span>
-                                                        <span className={`px-2 py-1 rounded-md ${isPrimary ? "text-xl font-black bg-yellow-100 dark:bg-yellow-900/40 text-yellow-800 dark:text-yellow-300" : "text-base"}`}>
-                                                            ${Math.round(bar.cost).toLocaleString()}
-                                                        </span>
+                                                        <span className={`px-2 py-1 rounded-md ${isPrimary ? "text-xl font-black bg-yellow-100 dark:bg-yellow-900/40 text-yellow-800 dark:text-yellow-300" : "text-base"}`}>${Math.round(bar.cost).toLocaleString()}</span>
                                                     </div>
                                                     <div className="w-full bg-slate-100 dark:bg-slate-700 rounded-full h-4 overflow-hidden"><div className={`${bar.colorClass} h-full transition-all duration-1000 ease-out`} style={{ width: `${(bar.cost/maxAnnualCost)*100}%` }}></div></div>
                                                 </div>
@@ -1440,19 +771,11 @@
                                         <span className="flex items-center gap-1.5"><div className="w-3 h-1 bg-slate-500 rounded-full"></div> Oil</span>
                                         <span className="flex items-center gap-1.5"><div className="w-3 h-1 bg-red-500 rounded-full"></div> Gas</span>
                                         <span className="flex items-center gap-1.5"><div className="w-3 h-1 bg-orange-500 rounded-full"></div> Propane</span>
-                                    </div>                                    <div className="border-t border-slate-100 dark:border-slate-700 pt-4 flex flex-col sm:flex-row gap-6 text-sm px-4">
-                                        <div className="flex-1 flex flex-col items-center sm:items-start gap-1 text-slate-600 dark:text-slate-300">
-                                            <span className="bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 px-3 py-1 rounded-full font-bold whitespace-nowrap">Gas Balance: {hpVsGasBalance}°F</span>
-                                            <p className="text-xs mt-1 text-center sm:text-left">Below this temp, Natural Gas becomes cheaper.</p>
-                                        </div>
-                                        <div className="flex-1 flex flex-col items-center sm:items-start gap-1 text-slate-600 dark:text-slate-300">
-                                            <span className="bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 px-3 py-1 rounded-full font-bold whitespace-nowrap">Oil Balance: {hpVsOilBalance}°F</span>
-                                            <p className="text-xs mt-1 text-center sm:text-left">Below this temp, Heating Oil becomes cheaper.</p>
-                                        </div>
-                                        <div className="flex-1 flex flex-col items-center sm:items-start gap-1 text-slate-600 dark:text-slate-300">
-                                            <span className="bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400 px-3 py-1 rounded-full font-bold whitespace-nowrap">Propane Balance: {hpVsPropaneBalance}°F</span>
-                                            <p className="text-xs mt-1 text-center sm:text-left">Below this temp, Propane becomes cheaper.</p>
-                                        </div>
+                                    </div>
+                                    <div className="border-t border-slate-100 dark:border-slate-700 pt-4 flex flex-col sm:flex-row gap-6 text-sm px-4">
+                                        <div className="flex-1 flex flex-col items-center sm:items-start gap-1 text-slate-600 dark:text-slate-300"><span className="bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 px-3 py-1 rounded-full font-bold">Gas Balance: {hpVsGasBalance}°F</span><p className="text-xs mt-1">Below this, Gas is cheaper.</p></div>
+                                        <div className="flex-1 flex flex-col items-center sm:items-start gap-1 text-slate-600 dark:text-slate-300"><span className="bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 px-3 py-1 rounded-full font-bold">Oil Balance: {hpVsOilBalance}°F</span><p className="text-xs mt-1">Below this, Oil is cheaper.</p></div>
+                                        <div className="flex-1 flex flex-col items-center sm:items-start gap-1 text-slate-600 dark:text-slate-300"><span className="bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400 px-3 py-1 rounded-full font-bold">Propane Balance: {hpVsPropaneBalance}°F</span><p className="text-xs mt-1">Below this, Propane is cheaper.</p></div>
                                     </div>
                                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 px-4 pt-4">
                                         <ResultCard title="Heat Pump" cost={effectiveElecPrice / currentCOP} iconName="Zap" color="border-l-blue-500" subtitle={`COP: ${currentCOP.toFixed(2)}`} extraInfo={`Rate: $${effectiveElecPrice.toFixed(3)}/kWh`} />
@@ -1465,10 +788,7 @@
                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                                             <div className="space-y-4">
                                                 <SliderControl iconName="Zap" label="Electricity Price" value={elecPrice} min={0.05} max={0.50} step={0.01} unit="$/kWh" onChange={setElecPrice} colorClass="text-blue-500" />
-                                                <div className="p-4 border rounded-xl dark:border-slate-700 bg-white dark:bg-slate-800 shadow-sm">
-                                                    <label className="flex items-center gap-3 cursor-pointer group"><input type="checkbox" checked={applyHpDiscount} onChange={e => setApplyHpDiscount(e.target.checked)} className="w-5 h-5 rounded text-blue-600 focus:ring-blue-500" /><span className="text-sm font-medium dark:text-slate-300 group-hover:text-blue-600 transition-colors">Apply heat pump rate discount</span></label>
-                                                    {applyHpDiscount && <div className="mt-4 pt-4 border-t dark:border-slate-700"><SliderControl iconName="Zap" label="Discount Rate" value={hpDiscount} min={0.01} max={0.15} step={0.001} unit="$/kWh" onChange={setHpDiscount} colorClass="text-blue-400" description="MA Delivery Discount: $0.073/kWh" /><p className="text-[10px] mt-2 font-bold text-blue-600 dark:text-blue-400">Effective Rate: ${effectiveElecPrice.toFixed(3)}/kWh</p></div>}
-                                                </div>
+                                                <div className="p-4 border rounded-xl dark:border-slate-700 bg-white dark:bg-slate-800 shadow-sm"><label className="flex items-center gap-3 cursor-pointer group"><input type="checkbox" checked={applyHpDiscount} onChange={e => setApplyHpDiscount(e.target.checked)} className="w-5 h-5 rounded text-blue-600 focus:ring-blue-500" /><span className="text-sm font-medium dark:text-slate-300 group-hover:text-blue-600 transition-colors">Apply heat pump rate discount</span></label>{applyHpDiscount && <div className="mt-4 pt-4 border-t dark:border-slate-700"><SliderControl iconName="Zap" label="Discount Rate" value={hpDiscount} min={0.01} max={0.15} step={0.001} unit="$/kWh" onChange={setHpDiscount} colorClass="text-blue-400" description="MA Delivery Discount: $0.073/kWh" /><p className="text-[10px] mt-2 font-bold text-blue-600 dark:text-blue-400">Effective Rate: ${effectiveElecPrice.toFixed(3)}/kWh</p></div>}</div>
                                             </div>
                                             <div className="space-y-6">
                                                 <SliderControl iconName="Settings" label="Furnace Efficiency" value={efficiency} min={60} max={100} step={1} unit="%" onChange={setEfficiency} colorClass="text-slate-500" />
@@ -1480,162 +800,39 @@
                                     </div>
                                 </div>
 
-                                {/* Annual heating hours (MOVED ABOVE MY HOME) */}
                                 <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border dark:border-slate-700 animate-in fade-in slide-in-from-bottom-4 duration-500 delay-200">
                                     <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 px-4 pt-4">
-                                        <div className="mb-4 md:mb-0 w-full">
-                                            <div className="flex justify-between items-start">
-                                                <h2 className="text-xl font-bold dark:text-white">Annual Heating Hours</h2>
-                                                {isUsingFallback && (
-                                                    <span className="flex items-center gap-1.5 px-3 py-1 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 rounded-full text-xs font-bold border border-amber-200 dark:border-amber-800 animate-pulse">
-                                                        <Icon name="Settings" size={12} /> STATISTICAL MODEL
-                                                    </span>
-                                                )}
-                                            </div>
-                                            <p className="text-sm text-slate-500 dark:text-slate-400 mt-2 max-w-3xl leading-relaxed">
-                                                {isUsingFallback ? (
-                                                    <span><strong>Note:</strong> We are currently using a <strong>statistical approximation</strong> of a typical winter for your region. For more accurate results, use the ZIP lookup to fetch historic weather data.</span>
-                                                ) : (
-                                                    <span>Heating stops above your <strong>balance point</strong> ({Math.round(balancePoint)}°F) because things like your stove, the sun, and even the people in your household add heat.</span>
-                                                )}
-                                                <br/><br/>
-                                                Even though fossil fuels are often cheaper than even very efficient heat pumps at extremely cold temperatures, a heat pump might be the right choice for you depending on your weather. Here is how long your household spends at each temperature in the heating season in {activeZipCode || 'your area'}.
-                                            </p>
-                                        </div>
+                                        <div className="mb-4 md:mb-0 w-full"><div className="flex justify-between items-start"><h2 className="text-xl font-bold dark:text-white">Annual Heating Hours</h2>{isUsingFallback && ( <span className="flex items-center gap-1.5 px-3 py-1 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 rounded-full text-xs font-bold border border-amber-200 dark:border-amber-800 animate-pulse"><Icon name="Settings" size={12} /> STATISTICAL MODEL</span> )}</div><p className="text-sm text-slate-500 dark:text-slate-400 mt-2 max-w-3xl leading-relaxed">{isUsingFallback ? ( <span><strong>Note:</strong> We are currently using a <strong>statistical approximation</strong> of a typical winter for your region. For more accurate results, use the ZIP lookup to fetch historic weather data.</span> ) : ( <span>Heating stops above your <strong>balance point</strong> ({Math.round(balancePoint)}°F) because things like your stove, the sun, and even the people in your household add heat.</span> )}<br/><br/>Even though fossil fuels are often cheaper than even very efficient heat pumps at extremely cold temperatures, a heat pump might be the right choice for you depending on your weather. Here is how long your household spends at each temperature in the heating season in {activeZipCode || 'your area'}.</p></div>
                                     </div>
                                     <div className="w-full h-72 px-4 pb-4">{renderBinGraph()}</div>
-                                    <div className="px-4 pb-4">
-                                        <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                                            During {hpCheaperPercentage}% of the heating season, a {COP_PROFILES[hpProfileId].name} is cheaper than any fossil fuels in your area with your prices.
-                                        </p>
-                                    </div>
+                                    <div className="px-4 pb-4"><p className="text-sm font-medium text-slate-700 dark:text-slate-300">During {hpCheaperPercentage}% of the heating season, a {COP_PROFILES[hpProfileId].name} is cheaper than any fossil fuels in your area with your prices.</p></div>
                                 </div>
 
-                                {/* How much heat we need (FORMERLY MY HOME) */}
                                 <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border dark:border-slate-700 grid grid-cols-1 md:grid-cols-2 gap-8 items-center animate-in fade-in slide-in-from-bottom-4 duration-500 delay-300">
-                                    <div>
-                                        <h2 className="text-xl font-bold dark:text-white mb-2">How much heat we need</h2>
-                                        <p className="text-sm text-slate-500 dark:text-slate-400 mb-6 leading-relaxed">Heat load is based on size and insulation. For a precise estimate, a <a href="https://www.coolcalc.com/" target="_blank" rel="noopener noreferrer" className="text-blue-600 dark:text-blue-400 hover:underline">Manual J calculation</a> is necessary.</p>
-                                        <div className="space-y-4">
-                                            <SelectControl iconName="Home" label="Home Size" value={homeSize} options={HOME_SIZE_OPTIONS} onChange={() => {}} colorClass="text-slate-500" disabled={true} />
-                                            <SelectControl iconName="Shield" label="Insulation Quality" value={homeInsulation} options={INSULATION_OPTIONS} onChange={() => {}} colorClass="text-emerald-500" disabled={true} />
-                                            <SliderControl iconName="Zap" label="Internal Gains" value={internalGains} min={0} max={2000} step={50} unit="W" onChange={setInternalGains} colorClass="text-yellow-500" description="Heat from occupants, appliances, and sun." />
-                                        </div>
-                                    </div>
+                                    <div><h2 className="text-xl font-bold dark:text-white mb-2">How much heat we need</h2><p className="text-sm text-slate-500 dark:text-slate-400 mb-6 leading-relaxed">Heat load is based on size and insulation. For a precise estimate, a <a href="https://www.coolcalc.com/" target="_blank" rel="noopener noreferrer" className="text-blue-600 dark:text-blue-400 hover:underline">Manual J calculation</a> is necessary.</p><div className="space-y-4"><SelectControl iconName="Home" label="Home Size" value={homeSize} options={HOME_SIZE_OPTIONS} onChange={() => {}} colorClass="text-slate-500" disabled={true} /><SelectControl iconName="Shield" label="Insulation Quality" value={homeInsulation} options={INSULATION_OPTIONS} onChange={() => {}} colorClass="text-emerald-500" disabled={true} /><SliderControl iconName="Zap" label="Internal Gains" value={internalGains} min={0} max={2000} step={50} unit="W" onChange={setInternalGains} colorClass="text-yellow-500" description="Heat from occupants, appliances, and sun." /></div></div>
                                     <div className="w-full h-48"><p className="text-[10px] font-bold text-center dark:text-slate-300 mb-2 uppercase tracking-wider">Estimated Heat Load (kW)</p>{renderAssumptionGraph('load')}</div>
                                 </div>
-
                                 {dataSourcesCard}
                             </>
                         )}
 
-                        {/* --- VIEW 3 ONLY --- */}
                         {currentView === 3 && (
                             <>
                                 <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-700 flex flex-col gap-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
                                     <h2 className="text-xl font-bold dark:text-white flex items-center gap-2"><Icon name="Settings" size={20} className="text-slate-400"/> Upgrades to consider</h2>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                                        <div className="space-y-4">
-                                            <div className="space-y-3 p-3 bg-slate-50 dark:bg-slate-900 rounded-xl border dark:border-slate-700">
-                                                <label className="flex items-center gap-3 cursor-pointer"><input type="checkbox" checked={changeSetpoint} onChange={e => setChangeSetpoint(e.target.checked)} className="w-5 h-5 rounded text-blue-600"/><span className="text-sm font-medium dark:text-slate-200">Change default heat setpoint</span></label>
-                                                {changeSetpoint && <div className="pl-8 pt-2 border-t dark:border-slate-700 mt-2"><SliderControl label="Upgraded Setpoint" value={upgradedSetpoint} min={50} max={75} step={1} unit="°F" onChange={setUpgradedSetpoint} colorClass="text-orange-500" /></div>}
-                                            </div>
-                                            <div className="space-y-3 p-3 bg-slate-50 dark:bg-slate-900 rounded-xl border dark:border-slate-700">
-                                                <label className="flex items-center gap-3 cursor-pointer"><input type="checkbox" checked={useSmartThermostat} onChange={e => setUseSmartThermostat(e.target.checked)} className="w-5 h-5 rounded text-blue-600"/><span className="text-sm font-medium dark:text-slate-200">Use smart thermostat</span></label>
-                                                {useSmartThermostat && <div className="pl-8 pt-2 border-t dark:border-slate-700 mt-2"><SliderControl label="Away hours / day" value={awayHours} min={0} max={24} step={1} unit="h" onChange={setAwayHours} colorClass="text-blue-500" /></div>}
-                                            </div>
-                                        </div>
-                                        <div className="space-y-4">
-                                            <div className="space-y-3 p-3 bg-slate-50 dark:bg-slate-900 rounded-xl border dark:border-slate-700">
-                                                <label className="flex items-center gap-3 cursor-pointer"><input type="checkbox" checked={addHP} onChange={e => setAddHP(e.target.checked)} className="w-5 h-5 rounded text-blue-600"/><span className="text-sm font-medium dark:text-slate-200">Add heat pump HVAC</span></label>
-                                                {addHP && <div className="pl-8 pt-2 border-t dark:border-slate-700 mt-2"><SelectControl label="Upgrade HP Model" value={upgradeHpProfileId} options={Object.entries(COP_PROFILES).map(([v, p]) => ({value: v, label: p.name}))} onChange={setUpgradeHpProfileId} colorClass="text-blue-500" /></div>}
-                                            </div>
-                                            <div className="space-y-3 p-3 bg-slate-50 dark:bg-slate-900 rounded-xl border dark:border-slate-700">
-                                                <label className="flex items-center gap-3 cursor-pointer"><input type="checkbox" checked={upgradeWeatherization} onChange={e => setUpgradeWeatherization(e.target.checked)} className="w-5 h-5 rounded text-blue-600"/><span className="text-sm font-medium dark:text-slate-200">Improve weatherization</span></label>
-                                                {upgradeWeatherization && <div className="pl-8 pt-2 border-t dark:border-slate-700 mt-2"><SelectControl label="Upgrade Insulation Quality" value={upgradeInsulationType} options={INSULATION_OPTIONS} onChange={setUpgradeInsulationType} colorClass="text-emerald-500" /></div>}
-                                            </div>
-                                            <div className="space-y-3 p-3 bg-slate-50 dark:bg-slate-900 rounded-xl border dark:border-slate-700">
-                                                <label className="flex items-center gap-3 cursor-pointer group"><input type="checkbox" checked={furnaceTuneUp} onChange={e => setFurnaceTuneUp(e.target.checked)} disabled={!isFossilFuel_Inner} className="w-5 h-5 rounded text-blue-600"/><span className="text-sm font-medium dark:text-slate-200">Annual furnace tune-up</span></label>
-                                                {furnaceTuneUp && isFossilFuel_Inner && <div className="pl-8 pt-2 border-t dark:border-slate-700 mt-2"><SliderControl label="Tuned Efficiency" value={upgradedEfficiency} min={efficiency} max={96} step={0.5} unit="%" onChange={setUpgradedEfficiency} colorClass="text-red-400" /></div>}
-                                            </div>
-                                        </div>
-                                    </div>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8"><div className="space-y-4"><div className="space-y-3 p-3 bg-slate-50 dark:bg-slate-900 rounded-xl border dark:border-slate-700"><label className="flex items-center gap-3 cursor-pointer"><input type="checkbox" checked={changeSetpoint} onChange={e => setChangeSetpoint(e.target.checked)} className="w-5 h-5 rounded text-blue-600"/><span className="text-sm font-medium dark:text-slate-200">Change default heat setpoint</span></label>{changeSetpoint && <div className="pl-8 pt-2 border-t dark:border-slate-700 mt-2"><SliderControl label="Upgraded Setpoint" value={upgradedSetpoint} min={50} max={75} step={1} unit="°F" onChange={setUpgradedSetpoint} colorClass="text-orange-500" /></div>}</div><div className="space-y-3 p-3 bg-slate-50 dark:bg-slate-900 rounded-xl border dark:border-slate-700"><label className="flex items-center gap-3 cursor-pointer"><input type="checkbox" checked={useSmartThermostat} onChange={e => setUseSmartThermostat(e.target.checked)} className="w-5 h-5 rounded text-blue-600"/><span className="text-sm font-medium dark:text-slate-200">Use smart thermostat</span></label>{useSmartThermostat && <div className="pl-8 pt-2 border-t dark:border-slate-700 mt-2"><SliderControl label="Away hours / day" value={awayHours} min={0} max={24} step={1} unit="h" onChange={setAwayHours} colorClass="text-blue-500" /></div>}</div></div><div className="space-y-4"><div className="space-y-3 p-3 bg-slate-50 dark:bg-slate-900 rounded-xl border dark:border-slate-700"><label className="flex items-center gap-3 cursor-pointer"><input type="checkbox" checked={addHP} onChange={e => setAddHP(e.target.checked)} className="w-5 h-5 rounded text-blue-600"/><span className="text-sm font-medium dark:text-slate-200">Add heat pump HVAC</span></label>{addHP && <div className="pl-8 pt-2 border-t dark:border-slate-700 mt-2"><SelectControl label="Upgrade HP Model" value={upgradeHpProfileId} options={Object.entries(COP_PROFILES).map(([v, p]) => ({value: v, label: p.name}))} onChange={setUpgradeHpProfileId} colorClass="text-blue-500" /></div>}</div><div className="space-y-3 p-3 bg-slate-50 dark:bg-slate-900 rounded-xl border dark:border-slate-700"><label className="flex items-center gap-3 cursor-pointer"><input type="checkbox" checked={upgradeWeatherization} onChange={e => setUpgradeWeatherization(e.target.checked)} className="w-5 h-5 rounded text-blue-600"/><span className="text-sm font-medium dark:text-slate-200">Improve weatherization</span></label>{upgradeWeatherization && <div className="pl-8 pt-2 border-t dark:border-slate-700 mt-2"><SelectControl label="Upgrade Insulation Quality" value={upgradeInsulationType} options={INSULATION_OPTIONS} onChange={setUpgradeInsulationType} colorClass="text-emerald-500" /></div>}</div><div className="space-y-3 p-3 bg-slate-50 dark:bg-slate-900 rounded-xl border dark:border-slate-700"><label className="flex items-center gap-3 cursor-pointer group"><input type="checkbox" checked={furnaceTuneUp} onChange={e => setFurnaceTuneUp(e.target.checked)} disabled={!isFossilFuel_Inner} className="w-5 h-5 rounded text-blue-600"/><span className="text-sm font-medium dark:text-slate-200">Annual furnace tune-up</span></label>{furnaceTuneUp && isFossilFuel_Inner && <div className="pl-8 pt-2 border-t dark:border-slate-700 mt-2"><SliderControl label="Tuned Efficiency" value={upgradedEfficiency} min={efficiency} max={96} step={0.5} unit="%" onChange={setUpgradedEfficiency} colorClass="text-red-400" /></div>}</div></div></div>
                                     <div className="border-t border-slate-100 dark:border-slate-700 pt-8 flex flex-col gap-8">
-                                        <div>
-                                            <h3 className="text-lg font-bold dark:text-white mb-6 uppercase tracking-wider text-slate-500">Estimated Cost of Upgrades</h3>
-                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                                <div className="p-4 rounded-xl border border-slate-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/50">
-                                                    <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Upfront Investment</p>
-                                                    <p className="text-3xl font-black dark:text-white">${upgradeFinancials.upfront.toLocaleString()}</p>
-                                                </div>
-                                                <div className="p-4 rounded-xl border border-slate-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/50">
-                                                    <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Recurring Annual Cost</p>
-                                                    <p className="text-3xl font-black dark:text-white">${upgradeFinancials.recurring.toLocaleString()}</p>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <div>
-                                            <h3 className="text-lg font-bold dark:text-white mb-6 uppercase tracking-wider text-slate-500">Heating cost after upgrades</h3>
-                                            <div className="max-w-4xl mx-auto">
-                                                {(() => {
-                                                    const bar = targetUpgradeBar;
-                                                    const baselinePrimaryCost = annualCosts[primaryHeating];
-                                                    const savings = baselinePrimaryCost - bar.cost;
-                                                    return (
-                                                        <div className={`p-4 rounded-xl border transition-all ${addHP ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-300 dark:border-blue-700 ring-2 ring-blue-400' : 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-300 dark:border-yellow-700 ring-2 ring-yellow-400'}`}>
-                                                            <div className="flex justify-between font-bold mb-2 dark:text-white items-center">
-                                                                <span className="flex items-center gap-2"><div className={`w-5 h-5 rounded ${bar.colorClass} flex items-center justify-center text-white`}><Icon name={bar.iconName} size={12}/></div><span className="text-base">{bar.label}</span></span>
-                                                                <div className="flex flex-col items-end">
-                                                                    <span className={`px-3 py-1 rounded-md text-xl font-black ${addHP ? 'bg-blue-600 text-white' : 'bg-yellow-100 dark:bg-yellow-900/40 text-yellow-800 dark:text-yellow-300'}`}>${Math.round(bar.cost).toLocaleString()}</span>
-                                                                    {Math.abs(savings) > 1 && <span className={`text-xs font-bold mt-1 ${savings > 0 ? 'text-green-600' : 'text-red-600'}`}>{savings > 0 ? `SAVING $${Math.round(savings).toLocaleString()}/yr` : `COSTS $${Math.round(Math.abs(savings)).toLocaleString()} MORE/yr`}</span>}
-                                                                </div>
-                                                            </div>
-                                                            <div className="w-full bg-slate-100 dark:bg-slate-700 rounded-full h-4 overflow-hidden"><div className={`${bar.colorClass} h-full transition-all duration-1000 ease-out`} style={{ width: `${(bar.cost/maxAnnualCost)*100}%` }}></div></div>
-                                                        </div>
-                                                    );
-                                                })()}
-                                            </div>
-                                        </div>
+                                        <div><h3 className="text-lg font-bold dark:text-white mb-6 uppercase tracking-wider text-slate-500">Estimated Cost of Upgrades</h3><div className="grid grid-cols-1 md:grid-cols-2 gap-4"><div className="p-4 rounded-xl border border-slate-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/50"><p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Upfront Investment</p><p className="text-3xl font-black dark:text-white">${upgradeFinancials.upfront.toLocaleString()}</p></div><div className="p-4 rounded-xl border border-slate-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/50"><p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Recurring Annual Cost</p><p className="text-3xl font-black dark:text-white">${upgradeFinancials.recurring.toLocaleString()}</p></div></div></div>
+                                        <div><h3 className="text-lg font-bold dark:text-white mb-6 uppercase tracking-wider text-slate-500">Heating cost after upgrades</h3><div className="max-w-4xl mx-auto">{(() => { const bar = targetUpgradeBar, savings = annualCosts[primaryHeating] - bar.cost; return ( <div className={`p-4 rounded-xl border transition-all ${addHP ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-300 dark:border-blue-700 ring-2 ring-blue-400' : 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-300 dark:border-yellow-700 ring-2 ring-yellow-400'}`}><div className="flex justify-between font-bold mb-2 dark:text-white items-center"><span className="flex items-center gap-2"><div className={`w-5 h-5 rounded ${bar.colorClass} flex items-center justify-center text-white`}><Icon name={bar.iconName} size={12}/></div><span className="text-base">{bar.label}</span></span><div className="flex flex-col items-end"><span className={`px-3 py-1 rounded-md text-xl font-black ${addHP ? 'bg-blue-600 text-white' : 'bg-yellow-100 dark:bg-yellow-900/40 text-yellow-800 dark:text-yellow-300'}`}>${Math.round(bar.cost).toLocaleString()}</span>{Math.abs(savings) > 1 && <span className={`text-xs font-bold mt-1 ${savings > 0 ? 'text-green-600' : 'text-red-600'}`}>{savings > 0 ? `SAVING $${Math.round(savings).toLocaleString()}/yr` : `COSTS $${Math.round(Math.abs(savings)).toLocaleString()} MORE/yr`}</span>}</div></div><div className="w-full bg-slate-100 dark:bg-slate-700 rounded-full h-4 overflow-hidden"><div className={`${bar.colorClass} h-full transition-all duration-1000 ease-out`} style={{ width: `${(bar.cost/maxAnnualCost)*100}%` }}></div></div></div> ); })()}</div></div>
                                     </div>
                                 </div>
 
                                 <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border dark:border-slate-700 grid grid-cols-1 md:grid-cols-2 gap-8 items-center animate-in fade-in slide-in-from-bottom-4 duration-500 delay-75">
-                                    <div>
-                                        <h2 className="text-xl font-bold dark:text-white mb-2">Choosing a heat pump</h2>
-                                        <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">
-                                            Heat pumps are more efficient in milder weather. Newer and higher-end heat pumps stay efficient into colder temperatures, but are often more expensive up-front.
-                                        </p>
-                                        <SelectControl 
-                                            iconName="ThermometerSnowflake" 
-                                            label="View Heat Pump Efficiency" 
-                                            value={hpProfileId} 
-                                            options={Object.entries(COP_PROFILES).map(([v, p]) => ({value: v, label: p.name}))} 
-                                            onChange={setHpProfileId} 
-                                            colorClass="text-blue-500" 
-                                        />
-                                    </div>
-                                    <div className="w-full h-48">
-                                        <p className="text-[10px] font-bold text-center dark:text-slate-300 mb-2 uppercase tracking-wider">
-                                            Efficiency (higher is better)
-                                        </p>
-                                        {renderAssumptionGraph('cop')}
-                                    </div>
+                                    <div><h2 className="text-xl font-bold dark:text-white mb-2">Choosing a heat pump</h2><p className="text-sm text-slate-500 dark:text-slate-400 mb-6">Heat pumps are more efficient in milder weather. Newer and higher-end heat pumps stay efficient into colder temperatures, but are often more expensive up-front.</p><SelectControl iconName="ThermometerSnowflake" label="View Heat Pump Efficiency" value={hpProfileId} options={Object.entries(COP_PROFILES).map(([v, p]) => ({value: v, label: p.name}))} onChange={setHpProfileId} colorClass="text-blue-500" /></div>
+                                    <div className="w-full h-48"><p className="text-[10px] font-bold text-center dark:text-slate-300 mb-2 uppercase tracking-wider">Efficiency (higher is better)</p>{renderAssumptionGraph('cop')}</div>
                                 </div>
 
-                                <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-700 animate-in fade-in slide-in-from-bottom-4 duration-500 delay-150">
-                                    <div className="flex justify-between items-center mb-6 px-4 pt-4">
-                                        <h2 className="text-xl font-bold text-slate-900 dark:text-white">Impact of upgrades</h2>
-                                        {isUsingFallback && (
-                                            <span className="flex items-center gap-1.5 px-3 py-1 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 rounded-full text-xs font-bold border border-amber-200 dark:border-amber-800">
-                                                <Icon name="Settings" size={12} /> STATISTICAL MODEL
-                                            </span>
-                                        )}
-                                    </div>
-                                    <div className="w-full px-4 pb-4">
-                                        {renderImpactGraph()}
-                                    </div>
-                                </div>
-
+                                <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-700 animate-in fade-in slide-in-from-bottom-4 duration-500 delay-150"><div className="flex justify-between items-center mb-6 px-4 pt-4"><h2 className="text-xl font-bold text-slate-900 dark:text-white">Impact of upgrades</h2>{isUsingFallback && ( <span className="flex items-center gap-1.5 px-3 py-1 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 rounded-full text-xs font-bold border border-amber-200 dark:border-amber-800"><Icon name="Settings" size={12} /> STATISTICAL MODEL</span> )}</div><div className="w-full px-4 pb-4">{renderImpactGraph()}</div></div>
                                 {dataSourcesCard}
                             </>
                         )}
