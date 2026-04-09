@@ -173,9 +173,39 @@
         const GRAPH_WIDTH = 800, GRAPH_HEIGHT = 300, GRAPH_PADDING = { top: 20, right: 30, bottom: 40, left: 60 };
         const X_MIN = -20, X_MAX = 65;
         const KWH_PER_GALLON_OIL = 40.6, KWH_PER_THERM_GAS = 29.3, KWH_PER_GALLON_PROPANE = 26.8;
-        const UA_BASE_BY_SIZE = { small: 0.10, medium: 0.15, large: 0.25 };
+
+        // Granular calculation helpers
+        const lerp = (x, x1, y1, x2, y2) => y1 + (y2 - y1) * (x - x1) / (x2 - x1);
+        
+        const getUAForSqft = (sqft) => {
+            if (sqft <= 1000) return 0.10;
+            if (sqft >= 3500) return 0.25;
+            if (sqft < 2000) return lerp(sqft, 1000, 0.10, 2000, 0.15);
+            return lerp(sqft, 2000, 0.15, 3500, 0.25);
+        };
+
+        const getGainsForSqft = (sqft) => {
+            if (sqft <= 1000) return 400;
+            if (sqft >= 3500) return 1000;
+            if (sqft < 2000) return lerp(sqft, 1000, 400, 2000, 600);
+            return lerp(sqft, 2000, 600, 3500, 1000);
+        };
+
+        const getHvacCostForSqft = (sqft) => {
+            if (sqft <= 1000) return 12000;
+            if (sqft >= 3500) return 28000;
+            if (sqft < 2000) return lerp(sqft, 1000, 12000, 2000, 18000);
+            return lerp(sqft, 2000, 18000, 3500, 28000);
+        };
+
+        const getWeatherizationCostMult = (sqft) => {
+            if (sqft <= 1000) return 0.7;
+            if (sqft >= 3500) return 1.5;
+            if (sqft < 2000) return lerp(sqft, 1000, 0.7, 2000, 1.0);
+            return lerp(sqft, 2000, 1.0, 3500, 1.5);
+        };
+
         const UA_MULTIPLIER_BY_INSULATION = { poor: 1.4, average: 1.0, excellent: 0.7 };
-        const DEFAULT_GAINS_BY_SIZE = { small: 400, medium: 600, large: 1000 };
 
         const COP_PROFILES = {
             high: { name: "High Efficiency (Premium Cold Climate)", curve: [{ t: -20, cop: 1.3 }, { t: -10, cop: 1.6 }, { t: 0, cop: 2.0 }, { t: 5, cop: 2.3 }, { t: 17, cop: 2.9 }, { t: 35, cop: 3.6 }, { t: 47, cop: 4.3 }, { t: 65, cop: 5.2 }] },
@@ -243,6 +273,42 @@
             </div>
         );
 
+        const HomeSizeSlider = ({ value, onChange, propSource }) => {
+            const isGranular = propSource !== 'none';
+            const anchors = { small: 1000, medium: 2000, large: 3500 };
+            const categoricalValue = value <= 1000 ? 0 : (value >= 3500 ? 2 : 1);
+            
+            const handleChange = (e) => {
+                const val = parseFloat(e.target.value);
+                if (isGranular) {
+                    onChange(val);
+                } else {
+                    const mapped = [anchors.small, anchors.medium, anchors.large][val];
+                    onChange(mapped);
+                }
+            };
+
+            return (
+                <div className="w-full text-sm">
+                    <div className="flex justify-between items-center mb-2">
+                        <div className="flex items-center gap-2 text-slate-700 dark:text-slate-200 font-medium">
+                            <Icon name="Home" className="text-slate-500" />
+                            <span>Home Size</span>
+                        </div>
+                        <span className="font-semibold text-slate-900 dark:text-white bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded-md">
+                            {isGranular ? `${value} sqft` : (value <= 1000 ? "Small (< 1,500 sqft)" : (value >= 3500 ? "Large (> 2,500 sqft)" : "Medium (1,500 - 2,500 sqft)"))}
+                        </span>
+                    </div>
+                    <input type="range" min={isGranular ? 500 : 0} max={isGranular ? 5000 : 2} step={isGranular ? 50 : 1} value={isGranular ? value : categoricalValue} onChange={handleChange} className="w-full h-2 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer"/>
+                    <div className="flex justify-between text-[10px] text-slate-400 mt-1 px-1 font-bold uppercase tracking-wider">
+                        <span>{isGranular ? '500' : 'Small'}</span>
+                        {!isGranular && <span>Medium</span>}
+                        <span>{isGranular ? '5000' : 'Large'}</span>
+                    </div>
+                </div>
+            );
+        };
+
         const ResultCard = ({ title, cost, color, iconName, subtitle, extraInfo }) => (
             <div className={`p-4 rounded-xl border-l-4 shadow-sm bg-white dark:bg-slate-800 ${color}`}>
                 <div className="flex justify-between items-start text-sm">
@@ -269,13 +335,14 @@
             const [activeAddress, setActiveAddress] = useState('');
             const [lookupMessage, setLookupMessage] = useState('');
             const [isLoadingData, setIsLoadingData] = useState(false);
+            const [showHouseholdDetails, setShowHouseholdDetails] = useState(false);
             const [loadProgress, setLoadProgress] = useState(0);
             const [zipCacheCount, setZipCacheCount] = useState(0);
             const [addrCacheCount, setAddrCacheCount] = useState(0);
             const [fetchedBinData, setFetchedBinData] = useState(null);
             const [priceSource, setPriceSource] = useState('regional');
             const [propSource, setPropSource] = useState('none');
-            const [homeSize, setHomeSize] = useState('medium');
+            const [homeSize, setHomeSize] = useState(2000); // Now represents SqFt (500-5000)
             const [homeInsulation, setHomeInsulation] = useState('average');
             const [primaryHeating, setPrimaryHeating] = useState('gas');
             const [heatingSetpoint, setHeatingSetpoint] = useState(68);
@@ -311,14 +378,14 @@
             }, []);
 
             useEffect(() => { updateCacheCounts(); }, [updateCacheCounts]);
-            useEffect(() => { setInternalGains(DEFAULT_GAINS_BY_SIZE[homeSize]); }, [homeSize]);
+            useEffect(() => { setInternalGains(Math.round(getGainsForSqft(homeSize) / 50) * 50); }, [homeSize]);
             useEffect(() => { if (!changeSetpoint) setUpgradedSetpoint(heatingSetpoint - 2); }, [heatingSetpoint]);
             useEffect(() => { setUpgradedEfficiency(Math.min(96, efficiency * 1.05)); }, [efficiency]);
 
-            const currentUA = useMemo(() => UA_BASE_BY_SIZE[homeSize] * UA_MULTIPLIER_BY_INSULATION[homeInsulation], [homeSize, homeInsulation]);
+            const currentUA = useMemo(() => getUAForSqft(homeSize) * UA_MULTIPLIER_BY_INSULATION[homeInsulation], [homeSize, homeInsulation]);
             const upgradedUA = useMemo(() => {
                 const insul = upgradeWeatherization ? upgradeInsulationType : homeInsulation;
-                return UA_BASE_BY_SIZE[homeSize] * UA_MULTIPLIER_BY_INSULATION[insul];
+                return getUAForSqft(homeSize) * UA_MULTIPLIER_BY_INSULATION[insul];
             }, [homeSize, upgradeWeatherization, upgradeInsulationType, homeInsulation]);
 
             const activeCurve = useMemo(() => COP_PROFILES[hpProfileId].curve, [hpProfileId]);
@@ -415,14 +482,14 @@
                 if (useSmartThermostat) { upfront += 250; items.push({ name: "Smart Thermostat", cost: 250, period: "upfront" }); }
                 if (useWeatherAware) { upfront += 100; items.push({ name: "Weather-Aware Expansion", cost: 100, period: "upfront" }); }
                 if (addHP) {
-                    const base = { small: 12000, medium: 18000, large: 28000 }[homeSize];
+                    const base = getHvacCostForSqft(homeSize);
                     const mult = upgradeHpProfileId === 'high' ? 1.3 : (upgradeHpProfileId === 'medium' ? 1.1 : 1.0);
                     upfront += base * mult; items.push({ name: "Heat Pump HVAC", cost: base * mult, period: "upfront" });
                 }
                 if (upgradeWeatherization) {
                     const levels = { poor: 0, average: 1, excellent: 2 }, diff = levels[upgradeInsulationType] - levels[homeInsulation];
                     if (diff > 0) {
-                        const cost = diff * 3500 * ({ small: 0.7, medium: 1, large: 1.5 }[homeSize]);
+                        const cost = diff * 3500 * getWeatherizationCostMult(homeSize);
                         upfront += cost; items.push({ name: "Building Weatherization", cost: cost, period: "upfront" });
                     }
                 }
@@ -493,17 +560,23 @@
                                 const cachedAddr = localStorage.getItem(addrCacheKey);
                                 if (cachedAddr) {
                                     const pA = JSON.parse(cachedAddr); if (pA.address) { setAddress(pA.address); setActiveAddress(pA.address); }
-                                    if (pA.sqft) { if (pA.sqft < 1500) setHomeSize('small'); else if (pA.sqft < 3000) setHomeSize('medium'); else setHomeSize('large'); }
+                                    if (pA.sqft) { setHomeSize(Math.round(pA.sqft / 50) * 50); }
                                     if (pA.yearBuilt) { if (pA.yearBuilt < 1970) setHomeInsulation('poor'); else if (pA.yearBuilt < 2000) setHomeInsulation('average'); else setHomeInsulation('excellent'); }
                                     if (pA.fuel) { const fuel = pA.fuel.toUpperCase(); if (fuel.includes('GAS')) setPrimaryHeating('gas'); else if (fuel.includes('OIL')) setPrimaryHeating('oil'); else if (fuel.includes('PROPANE') || fuel.includes('BOTTLE')) setPrimaryHeating('propane'); else if (fuel.includes('ELEC')) setPrimaryHeating('electric'); }
                                     setPropSource('cached'); setLookupMessage(`Loaded all data for ${pA.address} from cache.`); addrFound = true;
                                 }
                             }
-                            if (!address || (address && addrFound)) { setCurrentView(2); return; }
+                            if (!address || (address && addrFound)) { 
+                                setShowHouseholdDetails(true);
+                                setCurrentView(2); 
+                                return; 
+                            }
                         } catch (e) { console.error("Cache parse failed:", e); }
                     }
                 }
-                setIsLoadingData(true); setLoadProgress(zipDataReady ? 40 : 5); setLookupMessage(zipDataReady ? "Using active ZIP data..." : "Validating coordinates...");
+                setIsLoadingData(true); 
+                setShowHouseholdDetails(true);
+                setLoadProgress(zipDataReady ? 40 : 5); setLookupMessage(zipDataReady ? "Using active ZIP data..." : "Validating coordinates...");
                 setActiveZipCode(cleanZip); setZipCode(cleanZip);
                 const progressInterval = setInterval(() => { setLoadProgress(prev => { if (prev >= 95) return prev; return prev + (prev < 40 ? 5 : (prev < 70 ? 2 : 1)); }); }, 400);
                 try {
@@ -547,7 +620,7 @@
                         if (propData && propData.sqft) {
                             finalPropData = { address: standardizedAddress, sqft: propData.sqft, yearBuilt: propData.yearBuilt, fuel: propData.fuel };
                             setPropSource(propData.source ? propData.source.toLowerCase() : 'cached');
-                            if (propData.sqft < 1500) setHomeSize('small'); else if (propData.sqft < 3000) setHomeSize('medium'); else setHomeSize('large');
+                            setHomeSize(Math.round(propData.sqft / 50) * 50);
                             if (propData.yearBuilt) { if (propData.yearBuilt < 1970) setHomeInsulation('poor'); else if (propData.yearBuilt < 2000) setHomeInsulation('average'); else setHomeInsulation('excellent'); }
                             if (propData.fuel) { const fuel = propData.fuel.toUpperCase(); if (fuel.includes('GAS')) setPrimaryHeating('gas'); else if (fuel.includes('OIL')) setPrimaryHeating('oil'); else if (fuel.includes('PROPANE') || fuel.includes('BOTTLE')) setPrimaryHeating('propane'); else if (fuel.includes('ELEC')) setPrimaryHeating('electric'); }
                         }
@@ -558,7 +631,9 @@
                     if (finalPropData) {
                         localStorage.setItem(`prop_v1_${finalPropData.address.toLowerCase().replace(/[^a-z0-9]/g, '')}`, JSON.stringify(finalPropData));
                     }
-                    updateCacheCounts(); setLoadProgress(100); setLookupMessage(`Data for ${finalPropData ? finalPropData.address : cleanZip} loaded successfully.`); setCurrentView(2);
+                    updateCacheCounts(); setLoadProgress(100); setLookupMessage(`Data for ${finalPropData ? finalPropData.address : cleanZip} loaded successfully.`); 
+                    setShowHouseholdDetails(true);
+                    setCurrentView(2);
                 } catch (err) {
                     console.error("Lookup failed:", err); setLookupMessage(`Error: ${err.message}. Please check your ZIP code and try again.`);
                     setFetchedBinData(null); setActiveZipCode(''); setActiveAddress('');
@@ -690,22 +765,38 @@
                             {currentView > 1 && ( <button onClick={() => { setCurrentView(1); setActiveZipCode(''); setActiveAddress(''); setZipCode(''); setAddress(''); setLookupMessage(''); setFetchedBinData(null); }} className="text-sm font-bold text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 transition-colors flex items-center gap-1"><Icon name="ArrowLeft" size={16} /> Reset Configuration</button> )}
                         </div>
 
+                        {/* Explainer Card */}
+                        <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-700 animate-in fade-in duration-500">
+                            <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-3">Heat & Your Home</h2>
+                            <p className="text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
+                                Your heating needs are determined by two primary factors: the local <strong>climate</strong> and your home's <strong>structural efficiency</strong>. Larger homes with poor insulation require significantly more energy to maintain a comfortable temperature during extreme cold. By entering your ZIP code, we fetch real-world climate data to model exactly how many hours your heating system will run at various temperatures, allowing for a precise comparison between traditional fossil fuels and modern heat pump systems.
+                            </p>
+                        </div>
+
                         {currentView <= 2 && (
                             <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-700">
                                 <h2 className="text-xl font-bold dark:text-white mb-6 flex items-center gap-2"><Icon name="Home" size={20} className="text-slate-400"/> About my household</h2>
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                    <SelectControl iconName="Home" label="Home Size" value={homeSize} options={HOME_SIZE_OPTIONS} onChange={setHomeSize} colorClass="text-slate-500" />
-                                    <SelectControl iconName="Shield" label="Current Insulation" value={homeInsulation} options={INSULATION_OPTIONS} onChange={setHomeInsulation} colorClass="text-emerald-500" />
-                                    <SelectControl iconName={systemIcon} label="Primary Heating System" value={currentSystemVal} options={COMBINED_SYSTEM_OPTIONS} onChange={handleSystemChange} colorClass={systemColor} />
-                                    <SliderControl iconName="ThermometerSnowflake" label="Heating Setpoint" value={heatingSetpoint} min={50} max={75} step={1} unit="°F" onChange={setHeatingSetpoint} colorClass="text-orange-500" />
-                                    <div className="md:col-span-2">
-                                        <label className="flex items-center gap-2 font-medium mb-2 dark:text-slate-200"><Icon name="MapPin" size={18} className="text-slate-500"/> Location {hasPropKey && "& Property (Optional)"}</label>
-                                        <div className="flex flex-col gap-3">
-                                            <div className="flex flex-wrap gap-2">
-                                                <div className={`flex-1 ${hasPropKey ? 'min-w-[200px]' : 'md:max-w-xs'}`}><input type="text" value={zipCode} onChange={e => setZipCode(e.target.value)} disabled={isLoadingData} placeholder="ZIP Code" className="w-full px-3 py-2 border rounded-lg bg-white dark:bg-slate-900 dark:text-white dark:border-slate-700 focus:ring-2 focus:ring-blue-500 outline-none disabled:opacity-50"/></div>
-                                                {hasPropKey && ( <div className="flex-[2] min-w-[280px]"><input type="text" value={address} onChange={e => setAddress(e.target.value)} disabled={isLoadingData} placeholder="Street Address (Optional)" className="w-full px-3 py-2 border rounded-lg bg-white dark:bg-slate-900 dark:text-white dark:border-slate-700 focus:ring-2 focus:ring-blue-500 outline-none disabled:opacity-50"/></div> )}
-                                                <button onClick={(e) => handleZipLookup(e, true, false)} disabled={isLoadingData || cleanZip.length < 5 || (activeZipCode === cleanZip && activeAddress === address.trim())} className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition-colors whitespace-nowrap font-bold flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm">{isLoadingData ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Icon name="TrendingUp" size={18} />}Load data</button>
-                                                {activeZipCode && activeZipCode === cleanZip && activeAddress === address.trim() && !isLoadingData && ( <button onClick={(e) => handleZipLookup(e, true, true)} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors group" title="Force fresh data fetch"><div className="flex items-center gap-1.5 px-1"><Icon name="Settings" size={16} className="group-hover:rotate-180 transition-transform duration-500" /><span className="text-xs font-bold uppercase tracking-wider">Re-fetch</span></div></button> )}
+                                    <div className="md:col-span-2 pb-6 border-b dark:border-slate-700 mb-2">
+                                        <div className="flex flex-col gap-4">
+                                            <div className="flex flex-wrap gap-4 items-end">
+                                                <div className={`flex-1 ${hasPropKey ? 'min-w-[150px]' : 'md:max-w-[150px]'}`}>
+                                                    <label className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-500 mb-2 dark:text-slate-400"><Icon name="MapPin" size={14} /> ZIP Code</label>
+                                                    <input type="text" value={zipCode} onChange={e => setZipCode(e.target.value)} disabled={isLoadingData} placeholder="00000" className="w-full px-3 py-2 border rounded-lg bg-white dark:bg-slate-900 dark:text-white dark:border-slate-700 focus:ring-2 focus:ring-blue-500 outline-none disabled:opacity-50"/>
+                                                </div>
+                                                {hasPropKey && (
+                                                    <div className="flex-[2] min-w-[250px]">
+                                                        <label className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-500 mb-2 dark:text-slate-400"><Icon name="Home" size={14} /> Street Address (Optional)</label>
+                                                        <input type="text" value={address} onChange={e => setAddress(e.target.value)} disabled={isLoadingData} placeholder="123 Main St" className="w-full px-3 py-2 border rounded-lg bg-white dark:bg-slate-900 dark:text-white dark:border-slate-700 focus:ring-2 focus:ring-blue-500 outline-none disabled:opacity-50"/>
+                                                    </div>
+                                                )}
+                                                <div className="flex items-center gap-2">
+                                                    <button onClick={(e) => handleZipLookup(e, true, false)} disabled={isLoadingData || cleanZip.length < 5 || (activeZipCode === cleanZip && activeAddress === address.trim())} className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition-colors whitespace-nowrap font-bold flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm">{isLoadingData ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Icon name="TrendingUp" size={18} />}Load data</button>
+                                                    {!showHouseholdDetails && !isLoadingData && (
+                                                        <button onClick={() => setShowHouseholdDetails(true)} className="px-4 py-2 border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors font-bold whitespace-nowrap">Manually Enter</button>
+                                                    )}
+                                                    {activeZipCode && activeZipCode === cleanZip && activeAddress === address.trim() && !isLoadingData && ( <button onClick={(e) => handleZipLookup(e, true, true)} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors group" title="Force fresh data fetch"><div className="flex items-center gap-1.5 px-1"><Icon name="Settings" size={16} className="group-hover:rotate-180 transition-transform duration-500" /><span className="text-xs font-bold uppercase tracking-wider">Re-fetch</span></div></button> )}
+                                                </div>
                                             </div>
                                             {activeZipCode && (
                                                 <div className="flex flex-wrap gap-2 mt-2">
@@ -718,6 +809,15 @@
                                             {lookupMessage && <p className={`text-xs font-medium ${lookupMessage.startsWith('Error') ? 'text-red-500' : 'text-blue-500'}`}>{lookupMessage}</p>}
                                         </div>
                                     </div>
+
+                                    {showHouseholdDetails && (
+                                        <>
+                                            <HomeSizeSlider value={homeSize} onChange={setHomeSize} propSource={propSource} />
+                                            <SelectControl iconName="Shield" label="Current Insulation" value={homeInsulation} options={INSULATION_OPTIONS} onChange={setHomeInsulation} colorClass="text-emerald-500" />
+                                            <SelectControl iconName={systemIcon} label="Primary Heating System" value={currentSystemVal} options={COMBINED_SYSTEM_OPTIONS} onChange={handleSystemChange} colorClass={systemColor} />
+                                            <SliderControl iconName="ThermometerSnowflake" label="Heating Setpoint" value={heatingSetpoint} min={50} max={75} step={1} unit="°F" onChange={setHeatingSetpoint} colorClass="text-orange-500" />
+                                        </>
+                                    )}
                                 </div>
                             </div>
                         )}
@@ -809,7 +909,12 @@
                                 </div>
 
                                 <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border dark:border-slate-700 grid grid-cols-1 md:grid-cols-2 gap-8 items-center animate-in fade-in slide-in-from-bottom-4 duration-500 delay-300">
-                                    <div><h2 className="text-xl font-bold dark:text-white mb-2">How much heat we need</h2><p className="text-sm text-slate-500 dark:text-slate-400 mb-6 leading-relaxed">Heat load is based on size and insulation. For a precise estimate, a <a href="https://www.coolcalc.com/" target="_blank" rel="noopener noreferrer" className="text-blue-600 dark:text-blue-400 hover:underline">Manual J calculation</a> is necessary.</p><div className="space-y-4"><SelectControl iconName="Home" label="Home Size" value={homeSize} options={HOME_SIZE_OPTIONS} onChange={() => {}} colorClass="text-slate-500" disabled={true} /><SelectControl iconName="Shield" label="Insulation Quality" value={homeInsulation} options={INSULATION_OPTIONS} onChange={() => {}} colorClass="text-emerald-500" disabled={true} /><SliderControl iconName="Zap" label="Internal Gains" value={internalGains} min={0} max={2000} step={50} unit="W" onChange={setInternalGains} colorClass="text-yellow-500" description="Heat from occupants, appliances, and sun." /></div></div>
+                                    <div><h2 className="text-xl font-bold dark:text-white mb-2">How much heat we need</h2><p className="text-sm text-slate-500 dark:text-slate-400 mb-6 leading-relaxed">Heat load is based on size and insulation. For a precise estimate, a <a href="https://www.coolcalc.com/" target="_blank" rel="noopener noreferrer" className="text-blue-600 dark:text-blue-400 hover:underline">Manual J calculation</a> is necessary.</p><div className="space-y-4">
+                                        <div className="opacity-50 pointer-events-none">
+                                            <HomeSizeSlider value={homeSize} onChange={() => {}} propSource={propSource} />
+                                        </div>
+                                        <SelectControl iconName="Shield" label="Insulation Quality" value={homeInsulation} options={INSULATION_OPTIONS} onChange={() => {}} colorClass="text-emerald-500" disabled={true} />
+                                        <SliderControl iconName="Zap" label="Internal Gains" value={internalGains} min={0} max={2000} step={50} unit="W" onChange={setInternalGains} colorClass="text-yellow-500" description="Heat from occupants, appliances, and sun." /></div></div>
                                     <div className="w-full h-48"><p className="text-[10px] font-bold text-center dark:text-slate-300 mb-2 uppercase tracking-wider">Estimated Heat Load (kW)</p>{renderAssumptionGraph('load')}</div>
                                 </div>
                                 {dataSourcesCard}
