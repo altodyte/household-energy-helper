@@ -165,7 +165,9 @@
                 Shield: <path fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>,
                 Wrench: <path fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>,
                 CheckSquare: <g fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></g>,
-                ArrowLeft: <g fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></g>
+                ArrowLeft: <g fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></g>,
+                HelpCircle: <g fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></g>,
+                X: <g fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></g>
             };
             return <svg width={size} height={size} viewBox="0 0 24 24" className={className}>{icons[name] || null}</svg>;
         };
@@ -273,6 +275,31 @@
             </div>
         );
 
+        const HelpButton = ({ onClick, className = "" }) => (
+            <button onClick={onClick} className={`text-slate-400 hover:text-blue-500 transition-colors p-1 ${className}`} title="Learn more">
+                <Icon name="HelpCircle" size={16} />
+            </button>
+        );
+
+        const Modal = ({ isOpen, onClose, title, children }) => {
+            if (!isOpen) return null;
+            return (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200" onClick={onClose}>
+                    <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+                        <div className="flex justify-between items-center p-6 border-b dark:border-slate-700">
+                            <h2 className="text-xl font-bold dark:text-white">{title}</h2>
+                            <button onClick={onClose} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors">
+                                <Icon name="X" size={24} />
+                            </button>
+                        </div>
+                        <div className="p-6 overflow-y-auto">
+                            {children}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
         const HomeSizeSlider = ({ value, onChange, propSource }) => {
             const isGranular = propSource !== 'none';
             const anchors = { small: 1000, medium: 2000, large: 3500 };
@@ -336,6 +363,7 @@
             const [lookupMessage, setLookupMessage] = useState('');
             const [isLoadingData, setIsLoadingData] = useState(false);
             const [showHouseholdDetails, setShowHouseholdDetails] = useState(false);
+            const [showHpHelp, setShowHpHelp] = useState(false);
             const [loadProgress, setLoadProgress] = useState(0);
             const [zipCacheCount, setZipCacheCount] = useState(0);
             const [addrCacheCount, setAddrCacheCount] = useState(0);
@@ -750,7 +778,8 @@
             );
 
             return (
-                <div className="min-h-screen bg-slate-50 dark:bg-slate-900 p-4 md:p-8 flex flex-col items-center font-sans transition-colors duration-200">
+                <>
+                    <div className="min-h-screen bg-slate-50 dark:bg-slate-900 p-4 md:p-8 flex flex-col items-center font-sans transition-colors duration-200">
                     <div className="w-full max-w-5xl flex flex-col gap-6">
                         <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-700 flex flex-col md:flex-row justify-between items-center gap-4">
                             <div className="flex flex-col md:flex-row items-center gap-4">
@@ -844,39 +873,9 @@
                                     <div className="flex flex-col sm:flex-row gap-4"><button disabled className="px-6 py-3 bg-white dark:bg-slate-900 text-slate-400 dark:text-slate-600 border border-slate-200 dark:border-slate-800 rounded-xl cursor-not-allowed font-medium shadow-sm transition-opacity">Load from my energy bill</button><button onClick={() => { setCurrentView(3); window.scrollTo({top: 0, behavior: 'smooth'}); }} className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-md transition-all transform active:scale-95">Looks right, how can I save?</button></div>
                                 </div>
 
-                                <div className="bg-white dark:bg-slate-800 p-6 md:p-8 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-700 animate-in fade-in slide-in-from-bottom-4 duration-500 delay-75">
-                                    <h2 className="text-xl font-bold dark:text-white mb-2">Baseline annual heating cost comparison</h2>
-                                    <p className="text-sm text-slate-500 dark:text-slate-400 mb-6 italic">Estimated total heating cost for your current home setup before any upgrades.</p>
-                                    <div className="space-y-4 max-w-4xl mx-auto">
-                                        {costBars.map(bar => {
-                                            const isPrimary = bar.id === primaryHeating;
-                                            return (
-                                                <div key={bar.id} className={`p-4 rounded-xl border transition-all ${isPrimary ? 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-300 dark:border-yellow-700 ring-2 ring-yellow-400' : 'border-slate-100 dark:border-slate-700'}`}>
-                                                    <div className="flex justify-between font-bold mb-2 dark:text-white items-center">
-                                                        <span className="flex items-center gap-2"><div className={`w-5 h-5 rounded ${bar.colorClass} flex items-center justify-center text-white`}><Icon name={bar.iconName} size={12}/></div><span className={isPrimary ? "text-base" : "text-sm"}>{bar.label}</span>{isPrimary && <span className="text-[10px] bg-yellow-200 dark:bg-yellow-800 text-yellow-800 dark:text-yellow-200 px-1.5 py-0.5 rounded-full font-black uppercase">Baseline</span>}</span>
-                                                        <span className={`px-2 py-1 rounded-md ${isPrimary ? "text-xl font-black bg-yellow-100 dark:bg-yellow-900/40 text-yellow-800 dark:text-yellow-300" : "text-base"}`}>${Math.round(bar.cost).toLocaleString()}</span>
-                                                    </div>
-                                                    <div className="w-full bg-slate-100 dark:bg-slate-700 rounded-full h-4 overflow-hidden"><div className={`${bar.colorClass} h-full transition-all duration-1000 ease-out`} style={{ width: `${(bar.cost/maxAnnualCost)*100}%` }}></div></div>
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                </div>
-
                                 <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border dark:border-slate-700 flex flex-col gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500 delay-150">
                                     <h2 className="text-xl font-bold dark:text-white px-4 pt-4">Cost to deliver heat across outdoor temperatures</h2>
-                                    <div className="w-full h-80 pt-4">{renderLineGraph()}</div>
-                                    <div className="flex gap-4 text-xs font-bold dark:text-slate-400 justify-center pb-2">
-                                        <span className="flex items-center gap-1.5"><div className="w-3 h-1 bg-blue-500 rounded-full"></div> Heat Pump</span>
-                                        <span className="flex items-center gap-1.5"><div className="w-3 h-1 bg-slate-500 rounded-full"></div> Oil</span>
-                                        <span className="flex items-center gap-1.5"><div className="w-3 h-1 bg-red-500 rounded-full"></div> Gas</span>
-                                        <span className="flex items-center gap-1.5"><div className="w-3 h-1 bg-orange-500 rounded-full"></div> Propane</span>
-                                    </div>
-                                    <div className="border-t border-slate-100 dark:border-slate-700 pt-4 flex flex-col sm:flex-row gap-6 text-sm px-4">
-                                        <div className="flex-1 flex flex-col items-center sm:items-start gap-1 text-slate-600 dark:text-slate-300"><span className="bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 px-3 py-1 rounded-full font-bold">Gas Balance: {hpVsGasBalance}°F</span><p className="text-xs mt-1">Below this, Gas is cheaper.</p></div>
-                                        <div className="flex-1 flex flex-col items-center sm:items-start gap-1 text-slate-600 dark:text-slate-300"><span className="bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 px-3 py-1 rounded-full font-bold">Oil Balance: {hpVsOilBalance}°F</span><p className="text-xs mt-1">Below this, Oil is cheaper.</p></div>
-                                        <div className="flex-1 flex flex-col items-center sm:items-start gap-1 text-slate-600 dark:text-slate-300"><span className="bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400 px-3 py-1 rounded-full font-bold">Propane Balance: {hpVsPropaneBalance}°F</span><p className="text-xs mt-1">Below this, Propane is cheaper.</p></div>
-                                    </div>
+                                    
                                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 px-4 pt-4">
                                         <ResultCard title="Heat Pump" cost={effectiveElecPrice / currentCOP} iconName="Zap" color="border-l-blue-500" subtitle={`COP: ${currentCOP.toFixed(2)}`} extraInfo={`Rate: $${effectiveElecPrice.toFixed(3)}/kWh`} />
                                         <ResultCard title="Heating Oil" cost={oilCostAtEfficiency(efficiency)} iconName="Droplet" color="border-l-slate-500" />
@@ -898,6 +897,20 @@
                                             </div>
                                         </div>
                                     </div>
+
+                                    <div className="w-full h-80 pt-4">{renderLineGraph()}</div>
+                                    <div className="flex gap-4 text-xs font-bold dark:text-slate-400 justify-center pb-2">
+                                        <span className="flex items-center gap-1.5"><div className="w-3 h-1 bg-blue-500 rounded-full"></div> Heat Pump</span>
+                                        <span className="flex items-center gap-1.5"><div className="w-3 h-1 bg-slate-500 rounded-full"></div> Oil</span>
+                                        <span className="flex items-center gap-1.5"><div className="w-3 h-1 bg-red-500 rounded-full"></div> Gas</span>
+                                        <span className="flex items-center gap-1.5"><div className="w-3 h-1 bg-orange-500 rounded-full"></div> Propane</span>
+                                    </div>
+
+                                    <div className="border-t border-slate-100 dark:border-slate-700 pt-4 flex flex-col sm:flex-row gap-6 text-sm px-4">
+                                        <div className="flex-1 flex flex-col items-center sm:items-start gap-1 text-slate-600 dark:text-slate-300"><span className="bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 px-3 py-1 rounded-full font-bold">Gas Balance: {hpVsGasBalance}°F</span><p className="text-xs mt-1">Below this, Gas is cheaper.</p></div>
+                                        <div className="flex-1 flex flex-col items-center sm:items-start gap-1 text-slate-600 dark:text-slate-300"><span className="bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 px-3 py-1 rounded-full font-bold">Oil Balance: {hpVsOilBalance}°F</span><p className="text-xs mt-1">Below this, Oil is cheaper.</p></div>
+                                        <div className="flex-1 flex flex-col items-center sm:items-start gap-1 text-slate-600 dark:text-slate-300"><span className="bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400 px-3 py-1 rounded-full font-bold">Propane Balance: {hpVsPropaneBalance}°F</span><p className="text-xs mt-1">Below this, Propane is cheaper.</p></div>
+                                    </div>
                                 </div>
 
                                 <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border dark:border-slate-700 animate-in fade-in slide-in-from-bottom-4 duration-500 delay-200">
@@ -917,6 +930,26 @@
                                         <SliderControl iconName="Zap" label="Internal Gains" value={internalGains} min={0} max={2000} step={50} unit="W" onChange={setInternalGains} colorClass="text-yellow-500" description="Heat from occupants, appliances, and sun." /></div></div>
                                     <div className="w-full h-48"><p className="text-[10px] font-bold text-center dark:text-slate-300 mb-2 uppercase tracking-wider">Estimated Heat Load (kW)</p>{renderAssumptionGraph('load')}</div>
                                 </div>
+
+                                <div className="bg-white dark:bg-slate-800 p-6 md:p-8 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-700 animate-in fade-in slide-in-from-bottom-4 duration-500 delay-75">
+                                    <h2 className="text-xl font-bold dark:text-white mb-2">Baseline annual heating cost comparison</h2>
+                                    <p className="text-sm text-slate-500 dark:text-slate-400 mb-6 italic">Estimated total heating cost for your current home setup before any upgrades.</p>
+                                    <div className="space-y-4 max-w-4xl mx-auto">
+                                        {costBars.map(bar => {
+                                            const isPrimary = bar.id === primaryHeating;
+                                            return (
+                                                <div key={bar.id} className={`p-4 rounded-xl border transition-all ${isPrimary ? 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-300 dark:border-yellow-700 ring-2 ring-yellow-400' : 'border-slate-100 dark:border-slate-700'}`}>
+                                                    <div className="flex justify-between font-bold mb-2 dark:text-white items-center">
+                                                        <span className="flex items-center gap-2"><div className={`w-5 h-5 rounded ${bar.colorClass} flex items-center justify-center text-white`}><Icon name={bar.iconName} size={12}/></div><span className={isPrimary ? "text-base" : "text-sm"}>{bar.label}</span>{isPrimary && <span className="text-[10px] bg-yellow-200 dark:bg-yellow-800 text-yellow-800 dark:text-yellow-200 px-1.5 py-0.5 rounded-full font-black uppercase">Baseline</span>}</span>
+                                                        <span className={`px-2 py-1 rounded-md ${isPrimary ? "text-xl font-black bg-yellow-100 dark:bg-yellow-900/40 text-yellow-800 dark:text-yellow-300" : "text-base"}`}>${Math.round(bar.cost).toLocaleString()}</span>
+                                                    </div>
+                                                    <div className="w-full bg-slate-100 dark:bg-slate-700 rounded-full h-4 overflow-hidden"><div className={`${bar.colorClass} h-full transition-all duration-1000 ease-out`} style={{ width: `${(bar.cost/maxAnnualCost)*100}%` }}></div></div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+
                                 {dataSourcesCard}
                             </>
                         )}
@@ -925,24 +958,64 @@
                             <>
                                 <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-700 flex flex-col gap-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
                                     <h2 className="text-xl font-bold dark:text-white flex items-center gap-2"><Icon name="Settings" size={20} className="text-slate-400"/> Upgrades to consider</h2>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8"><div className="space-y-4"><div className="space-y-3 p-3 bg-slate-50 dark:bg-slate-900 rounded-xl border dark:border-slate-700"><label className="flex items-center gap-3 cursor-pointer"><input type="checkbox" checked={changeSetpoint} onChange={e => setChangeSetpoint(e.target.checked)} className="w-5 h-5 rounded text-blue-600"/><span className="text-sm font-medium dark:text-slate-200">Change default heat setpoint</span></label>{changeSetpoint && <div className="pl-8 pt-2 border-t dark:border-slate-700 mt-2"><SliderControl label="Upgraded Setpoint" value={upgradedSetpoint} min={50} max={75} step={1} unit="°F" onChange={setUpgradedSetpoint} colorClass="text-orange-500" /></div>}</div><div className="space-y-3 p-3 bg-slate-50 dark:bg-slate-900 rounded-xl border dark:border-slate-700"><label className="flex items-center gap-3 cursor-pointer"><input type="checkbox" checked={useSmartThermostat} onChange={e => setUseSmartThermostat(e.target.checked)} className="w-5 h-5 rounded text-blue-600"/><span className="text-sm font-medium dark:text-slate-200">Use smart thermostat</span></label>{useSmartThermostat && <div className="pl-8 pt-2 border-t dark:border-slate-700 mt-2"><SliderControl label="Away hours / day" value={awayHours} min={0} max={24} step={1} unit="h" onChange={setAwayHours} colorClass="text-blue-500" /></div>}</div></div><div className="space-y-4"><div className="space-y-3 p-3 bg-slate-50 dark:bg-slate-900 rounded-xl border dark:border-slate-700"><label className="flex items-center gap-3 cursor-pointer"><input type="checkbox" checked={addHP} onChange={e => setAddHP(e.target.checked)} className="w-5 h-5 rounded text-blue-600"/><span className="text-sm font-medium dark:text-slate-200">Add heat pump HVAC</span></label>{addHP && <div className="pl-8 pt-2 border-t dark:border-slate-700 mt-2"><SelectControl label="Upgrade HP Model" value={upgradeHpProfileId} options={Object.entries(COP_PROFILES).map(([v, p]) => ({value: v, label: p.name}))} onChange={setUpgradeHpProfileId} colorClass="text-blue-500" /></div>}</div><div className="space-y-3 p-3 bg-slate-50 dark:bg-slate-900 rounded-xl border dark:border-slate-700"><label className="flex items-center gap-3 cursor-pointer"><input type="checkbox" checked={upgradeWeatherization} onChange={e => setUpgradeWeatherization(e.target.checked)} className="w-5 h-5 rounded text-blue-600"/><span className="text-sm font-medium dark:text-slate-200">Improve weatherization</span></label>{upgradeWeatherization && <div className="pl-8 pt-2 border-t dark:border-slate-700 mt-2"><SelectControl label="Upgrade Insulation Quality" value={upgradeInsulationType} options={INSULATION_OPTIONS} onChange={setUpgradeInsulationType} colorClass="text-emerald-500" /></div>}</div><div className="space-y-3 p-3 bg-slate-50 dark:bg-slate-900 rounded-xl border dark:border-slate-700"><label className="flex items-center gap-3 cursor-pointer group"><input type="checkbox" checked={furnaceTuneUp} onChange={e => setFurnaceTuneUp(e.target.checked)} disabled={!isFossilFuel_Inner} className="w-5 h-5 rounded text-blue-600"/><span className="text-sm font-medium dark:text-slate-200">Annual furnace tune-up</span></label>{furnaceTuneUp && isFossilFuel_Inner && <div className="pl-8 pt-2 border-t dark:border-slate-700 mt-2"><SliderControl label="Tuned Efficiency" value={upgradedEfficiency} min={efficiency} max={96} step={0.5} unit="%" onChange={setUpgradedEfficiency} colorClass="text-red-400" /></div>}</div></div></div>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8"><div className="space-y-4"><div className="space-y-3 p-3 bg-slate-50 dark:bg-slate-900 rounded-xl border dark:border-slate-700"><label className="flex items-center gap-3 cursor-pointer"><input type="checkbox" checked={changeSetpoint} onChange={e => setChangeSetpoint(e.target.checked)} className="w-5 h-5 rounded text-blue-600"/><span className="text-sm font-medium dark:text-slate-200">Change default heat setpoint</span></label>{changeSetpoint && <div className="pl-8 pt-2 border-t dark:border-slate-700 mt-2"><SliderControl label="Upgraded Setpoint" value={upgradedSetpoint} min={50} max={75} step={1} unit="°F" onChange={setUpgradedSetpoint} colorClass="text-orange-500" /></div>}</div><div className="space-y-3 p-3 bg-slate-50 dark:bg-slate-900 rounded-xl border dark:border-slate-700"><label className="flex items-center gap-3 cursor-pointer"><input type="checkbox" checked={useSmartThermostat} onChange={e => setUseSmartThermostat(e.target.checked)} className="w-5 h-5 rounded text-blue-600"/><span className="text-sm font-medium dark:text-slate-200">Use smart thermostat</span></label>{useSmartThermostat && <div className="pl-8 pt-2 border-t dark:border-slate-700 mt-2"><SliderControl label="Away hours / day" value={awayHours} min={0} max={24} step={1} unit="h" onChange={setAwayHours} colorClass="text-blue-500" /></div>}</div></div><div className="space-y-4"><div className="space-y-3 p-3 bg-slate-50 dark:bg-slate-900 rounded-xl border dark:border-slate-700">
+                                            <div className="flex items-center justify-between">
+                                                <label className="flex items-center gap-3 cursor-pointer">
+                                                    <input type="checkbox" checked={addHP} onChange={e => setAddHP(e.target.checked)} className="w-5 h-5 rounded text-blue-600"/>
+                                                    <span className="text-sm font-medium dark:text-slate-200">Add heat pump HVAC</span>
+                                                </label>
+                                                <HelpButton onClick={() => setShowHpHelp(true)} />
+                                            </div>
+                                            {addHP && <div className="pl-8 pt-2 border-t dark:border-slate-700 mt-2"><SelectControl label="Upgrade HP Model" value={upgradeHpProfileId} options={Object.entries(COP_PROFILES).map(([v, p]) => ({value: v, label: p.name}))} onChange={setUpgradeHpProfileId} colorClass="text-blue-500" /></div>}
+                                        </div><div className="space-y-3 p-3 bg-slate-50 dark:bg-slate-900 rounded-xl border dark:border-slate-700"><label className="flex items-center gap-3 cursor-pointer"><input type="checkbox" checked={upgradeWeatherization} onChange={e => setUpgradeWeatherization(e.target.checked)} className="w-5 h-5 rounded text-blue-600"/><span className="text-sm font-medium dark:text-slate-200">Improve weatherization</span></label>{upgradeWeatherization && <div className="pl-8 pt-2 border-t dark:border-slate-700 mt-2"><SelectControl label="Upgrade Insulation Quality" value={upgradeInsulationType} options={INSULATION_OPTIONS} onChange={setUpgradeInsulationType} colorClass="text-emerald-500" /></div>}</div><div className="space-y-3 p-3 bg-slate-50 dark:bg-slate-900 rounded-xl border dark:border-slate-700"><label className="flex items-center gap-3 cursor-pointer group"><input type="checkbox" checked={furnaceTuneUp} onChange={e => setFurnaceTuneUp(e.target.checked)} disabled={!isFossilFuel_Inner} className="w-5 h-5 rounded text-blue-600"/><span className="text-sm font-medium dark:text-slate-200">Annual furnace tune-up</span></label>{furnaceTuneUp && isFossilFuel_Inner && <div className="pl-8 pt-2 border-t dark:border-slate-700 mt-2"><SliderControl label="Tuned Efficiency" value={upgradedEfficiency} min={efficiency} max={96} step={0.5} unit="%" onChange={setUpgradedEfficiency} colorClass="text-red-400" /></div>}</div></div></div>
                                     <div className="border-t border-slate-100 dark:border-slate-700 pt-8 flex flex-col gap-8">
                                         <div><h3 className="text-lg font-bold dark:text-white mb-6 uppercase tracking-wider text-slate-500">Estimated Cost of Upgrades</h3><div className="grid grid-cols-1 md:grid-cols-2 gap-4"><div className="p-4 rounded-xl border border-slate-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/50"><p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Upfront Investment</p><p className="text-3xl font-black dark:text-white">${upgradeFinancials.upfront.toLocaleString()}</p></div><div className="p-4 rounded-xl border border-slate-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/50"><p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Recurring Annual Cost</p><p className="text-3xl font-black dark:text-white">${upgradeFinancials.recurring.toLocaleString()}</p></div></div></div>
                                         <div><h3 className="text-lg font-bold dark:text-white mb-6 uppercase tracking-wider text-slate-500">Heating cost after upgrades</h3><div className="max-w-4xl mx-auto">{(() => { const bar = targetUpgradeBar, savings = annualCosts[primaryHeating] - bar.cost; return ( <div className={`p-4 rounded-xl border transition-all ${addHP ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-300 dark:border-blue-700 ring-2 ring-blue-400' : 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-300 dark:border-yellow-700 ring-2 ring-yellow-400'}`}><div className="flex justify-between font-bold mb-2 dark:text-white items-center"><span className="flex items-center gap-2"><div className={`w-5 h-5 rounded ${bar.colorClass} flex items-center justify-center text-white`}><Icon name={bar.iconName} size={12}/></div><span className="text-base">{bar.label}</span></span><div className="flex flex-col items-end"><span className={`px-3 py-1 rounded-md text-xl font-black ${addHP ? 'bg-blue-600 text-white' : 'bg-yellow-100 dark:bg-yellow-900/40 text-yellow-800 dark:text-yellow-300'}`}>${Math.round(bar.cost).toLocaleString()}</span>{Math.abs(savings) > 1 && <span className={`text-xs font-bold mt-1 ${savings > 0 ? 'text-green-600' : 'text-red-600'}`}>{savings > 0 ? `SAVING $${Math.round(savings).toLocaleString()}/yr` : `COSTS $${Math.round(Math.abs(savings)).toLocaleString()} MORE/yr`}</span>}</div></div><div className="w-full bg-slate-100 dark:bg-slate-700 rounded-full h-4 overflow-hidden"><div className={`${bar.colorClass} h-full transition-all duration-1000 ease-out`} style={{ width: `${(bar.cost/maxAnnualCost)*100}%` }}></div></div></div> ); })()}</div></div>
                                     </div>
                                 </div>
 
-                                <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border dark:border-slate-700 grid grid-cols-1 md:grid-cols-2 gap-8 items-center animate-in fade-in slide-in-from-bottom-4 duration-500 delay-75">
-                                    <div><h2 className="text-xl font-bold dark:text-white mb-2">Choosing a heat pump</h2><p className="text-sm text-slate-500 dark:text-slate-400 mb-6">Heat pumps are more efficient in milder weather. Newer and higher-end heat pumps stay efficient into colder temperatures, but are often more expensive up-front.</p><SelectControl iconName="ThermometerSnowflake" label="View Heat Pump Efficiency" value={hpProfileId} options={Object.entries(COP_PROFILES).map(([v, p]) => ({value: v, label: p.name}))} onChange={setHpProfileId} colorClass="text-blue-500" /></div>
-                                    <div className="w-full h-48"><p className="text-[10px] font-bold text-center dark:text-slate-300 mb-2 uppercase tracking-wider">Efficiency (higher is better)</p>{renderAssumptionGraph('cop')}</div>
+                                <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-700 animate-in fade-in slide-in-from-bottom-4 duration-500 delay-150"><div className="flex justify-between items-center mb-6 px-4 pt-4"><h2 className="text-xl font-bold text-slate-900 dark:text-white">Impact of upgrades</h2>{isUsingFallback && ( <span className="flex items-center gap-1.5 px-3 py-1 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 rounded-full text-xs font-bold border border-amber-200 dark:border-amber-800"><Icon name="Settings" size={12} /> STATISTICAL MODEL</span> )}</div><div className="w-full px-4 pb-4">{renderImpactGraph()}</div></div>
+
+                                <div className="bg-white dark:bg-slate-800 p-6 md:p-8 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-700 animate-in fade-in slide-in-from-bottom-4 duration-500 delay-75">
+                                    <h2 className="text-xl font-bold dark:text-white mb-2">Baseline annual heating cost comparison</h2>
+                                    <p className="text-sm text-slate-500 dark:text-slate-400 mb-6 italic">Estimated total heating cost for your current home setup before any upgrades.</p>
+                                    <div className="space-y-4 max-w-4xl mx-auto">
+                                        {costBars.map(bar => {
+                                            const isPrimary = bar.id === primaryHeating;
+                                            return (
+                                                <div key={bar.id} className={`p-4 rounded-xl border transition-all ${isPrimary ? 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-300 dark:border-yellow-700 ring-2 ring-yellow-400' : 'border-slate-100 dark:border-slate-700'}`}>
+                                                    <div className="flex justify-between font-bold mb-2 dark:text-white items-center">
+                                                        <span className="flex items-center gap-2"><div className={`w-5 h-5 rounded ${bar.colorClass} flex items-center justify-center text-white`}><Icon name={bar.iconName} size={12}/></div><span className={isPrimary ? "text-base" : "text-sm"}>{bar.label}</span>{isPrimary && <span className="text-[10px] bg-yellow-200 dark:bg-yellow-800 text-yellow-800 dark:text-yellow-200 px-1.5 py-0.5 rounded-full font-black uppercase">Baseline</span>}</span>
+                                                        <span className={`px-2 py-1 rounded-md ${isPrimary ? "text-xl font-black bg-yellow-100 dark:bg-yellow-900/40 text-yellow-800 dark:text-yellow-300" : "text-base"}`}>${Math.round(bar.cost).toLocaleString()}</span>
+                                                    </div>
+                                                    <div className="w-full bg-slate-100 dark:bg-slate-700 rounded-full h-4 overflow-hidden"><div className={`${bar.colorClass} h-full transition-all duration-1000 ease-out`} style={{ width: `${(bar.cost/maxAnnualCost)*100}%` }}></div></div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
                                 </div>
 
-                                <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-700 animate-in fade-in slide-in-from-bottom-4 duration-500 delay-150"><div className="flex justify-between items-center mb-6 px-4 pt-4"><h2 className="text-xl font-bold text-slate-900 dark:text-white">Impact of upgrades</h2>{isUsingFallback && ( <span className="flex items-center gap-1.5 px-3 py-1 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 rounded-full text-xs font-bold border border-amber-200 dark:border-amber-800"><Icon name="Settings" size={12} /> STATISTICAL MODEL</span> )}</div><div className="w-full px-4 pb-4">{renderImpactGraph()}</div></div>
                                 {dataSourcesCard}
                             </>
                         )}
                     </div>
                 </div>
+
+                <Modal isOpen={showHpHelp} onClose={() => setShowHpHelp(false)} title="Choosing a heat pump">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-center">
+                        <div>
+                            <p className="text-sm text-slate-600 dark:text-slate-400 mb-6 leading-relaxed">
+                                Heat pumps are more efficient in milder weather. Newer and higher-end heat pumps stay efficient into colder temperatures, but are often more expensive up-front.
+                            </p>
+                            <SelectControl iconName="ThermometerSnowflake" label="View Heat Pump Efficiency" value={hpProfileId} options={Object.entries(COP_PROFILES).map(([v, p]) => ({value: v, label: p.name}))} onChange={setHpProfileId} colorClass="text-blue-500" />
+                        </div>
+                        <div className="w-full h-48">
+                            <p className="text-[10px] font-bold text-center dark:text-slate-300 mb-2 uppercase tracking-wider">Efficiency (higher is better)</p>
+                            {renderAssumptionGraph('cop')}
+                        </div>
+                    </div>
+                </Modal>
+            </>
             );
         }
         const root = ReactDOM.createRoot(document.getElementById('root'));
